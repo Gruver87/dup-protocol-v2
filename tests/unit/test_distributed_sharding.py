@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Distributed sharding: per-node shard ownership + cross-shard credit."""
+
+import os
+import sys
+
+import pytest
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
+
+from dynamic_sharding import ShardingManager
+from storage.database import Database
+
+
+def _cross_shard_pair(num_shards=4):
+    for i in range(200):
+        a = f"0x{i:040x}"
+        b = f"0x{(i + num_shards * 17):040x}"
+        sh = ShardingManager(num_shards=num_shards)
+        if sh.get_shard_for_address(a) != sh.get_shard_for_address(b):
+            return a, b, sh.get_shard_for_address(a), sh.get_shard_for_address(b)
+    raise RuntimeError("no cross-shard pair")
+
+
+def test_distributed_cross_shard_two_dbs(tmp_path):
+    db0 = Database(str(tmp_path / "s0.db"))
+    db0.initialize()
+    db1 = Database(str(tmp_path / "s1.db"))
+    db1.initialize()
+
+    sender, recipient, from_shard, to_shard = _cross_shard_pair(2)
+    db0.set_balance(sender, 100.0)
+
+    src = ShardingManager(
+        num_shards=2,
+        db=db0,
+        assigned_shard_id=from_shard,
+        node_id="shard-src",
+        mode="distributed",
+    )
+    dst = ShardingManager(
+        num_shards=2,
+        db=db1,
+        assigned_shard_id=to_shard,
+        node_id="shard-dst",
+        mode="distributed",
+    )
+
+    _, tx_id = src.add_transaction({"from": sender, "to": recipient, "value": 25.0, "nonce": 0})
+    assert tx_id
+    assert src.cross_shard_txs[tx_id].status == "debited"
+    assert db0.get_balance(sender) == 75.0
+    assert db1.get_balance(recipient) == 0.0
+
+    payload = src.export_cross_shard_payload(tx_id)
+    assert dst.receive_cross_shard_credit(payload) is True
+    assert db1.get_balance(recipient) == 25.0
+
+    ack = {"tx_id": tx_id, "to_shard": to_shard, "status": "confirmed"}
+    assert src.receive_cross_shard_ack(ack) is True
+    assert src.cross_shard_txs[tx_id].status == "confirmed"
+
+
+def test_distributed_cross_shard_validator_quorum(tmp_path):
+    db0 = Database(str(tmp_path / "q0.db"))
+    db0.initialize()
+    db1 = Database(str(tmp_path / "q1.db"))
+    db1.initialize()
+
+    sender, recipient, from_shard, to_shard = _cross_shard_pair(2)
+    db0.set_balance(sender, 50.0)
+
+    committees = {
+        from_shard: ["src-v1", "src-v2", "src-v3"],
+        to_shard: ["dst-v1", "dst-v2", "dst-v3"],
+    }
+    src = ShardingManager(
+        num_shards=2,
+        db=db0,
+        assigned_shard_id=from_shard,
+        node_id="shard-src",
+        validator_id="src-v1",
+        mode="distributed",
+    )
+    src.load_shard_committees(committees)
+    dst = ShardingManager(
+        num_shards=2,
+        db=db1,
+        assigned_shard_id=to_shard,
+        node_id="shard-dst",
+        validator_id="dst-v1",
+        mode="distributed",
+    )
+    dst.load_shard_committees(committees)
+
+    _, tx_id = src.add_transaction({"from": sender, "to": recipient, "value": 10.0, "nonce": 0})
+    assert tx_id
+    assert src.cross_shard_txs[tx_id].status == "debited"
+    assert src.coordinator.quorum_reached(tx_id) is False
+
+    src.coordinator.record_validator_ack(tx_id, from_shard, "src-v2")
+    assert src.coordinator.quorum_reached(tx_id) is False
+
+    payload = src.export_cross_shard_payload(tx_id)
+    assert dst.receive_cross_shard_credit(payload) is True
+    assert db1.get_balance(recipient) == 10.0
+    assert dst.coordinator.quorum_reached(tx_id) is False
+
+    dst.coordinator.record_validator_ack(tx_id, to_shard, "dst-v2")
+    src.receive_cross_shard_ack({
+        "tx_id": tx_id,
+        "shard_id": to_shard,
+        "validator_id": "dst-v1",
+    })
+    assert src.coordinator.quorum_reached(tx_id) is False
+    assert src.receive_cross_shard_ack({
+        "tx_id": tx_id,
+        "shard_id": to_shard,
+        "validator_id": "dst-v2",
+    }) is True
+    assert src.cross_shard_txs[tx_id].status == "confirmed"
+
+
+def test_validator_ack_gossip_fanout(tmp_path):
+    db0 = Database(str(tmp_path / "g0.db"))
+    db0.initialize()
+    sender, recipient, from_shard, to_shard = _cross_shard_pair(2)
+    db0.set_balance(sender, 20.0)
+
+    gossip_log = []
+    committees = {from_shard: ["v1", "v2", "v3"]}
+    src = ShardingManager(
+        num_shards=2,
+        db=db0,
+        assigned_shard_id=from_shard,
+        node_id="relay-node",
+        validator_id="v1",
+        mode="distributed",
+    )
+    src.load_shard_committees(committees)
+    src.set_gossip_callback(lambda p: gossip_log.append(dict(p)))
+
+    _, tx_id = src.add_transaction({"from": sender, "to": recipient, "value": 5.0, "nonce": 0})
+    assert any(p.get("type") == "cross_shard_ack" for p in gossip_log)
+
+    peer = ShardingManager(
+        num_shards=2,
+        db=db0,
+        assigned_shard_id=from_shard,
+        node_id="peer-node",
+        validator_id="v2",
+        mode="distributed",
+    )
+    peer.load_shard_committees(committees)
+    peer.cross_shard_txs[tx_id] = src.cross_shard_txs[tx_id]
+    peer.coordinator.begin(tx_id, from_shard, to_shard)
+    peer.set_gossip_callback(lambda p: gossip_log.append(dict(p)))
+
+    peer.receive_cross_shard_ack({
+        "tx_id": tx_id,
+        "shard_id": from_shard,
+        "validator_id": "v1",
+    })
+    assert peer.coordinator.quorum_reached(tx_id) is False
+    peer.coordinator.record_ack(tx_id, to_shard)
+    assert peer.submit_cross_shard_validator_ack(tx_id, from_shard, "v2") is True
+    assert peer.coordinator.quorum_reached(tx_id) is True
+    relay_count = sum(
+        1 for p in gossip_log
+        if p.get("type") == "cross_shard_ack" and p.get("validator_id") == "v2"
+    )
+    assert relay_count >= 1
+
+
+def test_distributed_rejects_foreign_sender(tmp_path):
+    db = Database(str(tmp_path / "s.db"))
+    db.initialize()
+    sender, recipient, from_shard, to_shard = _cross_shard_pair(2)
+    wrong = ShardingManager(
+        num_shards=2,
+        db=db,
+        assigned_shard_id=to_shard,
+        node_id="wrong-shard",
+        mode="distributed",
+    )
+    with pytest.raises(ValueError, match="foreign_shard_sender"):
+        wrong.add_transaction({"from": sender, "to": recipient, "value": 1.0})
+
+
+def test_routing_mode_settles_on_one_db(tmp_path):
+    db = Database(str(tmp_path / "route.db"))
+    db.initialize()
+    sender, recipient, _, _ = _cross_shard_pair(4)
+    db.set_balance(sender, 50.0)
+    sh = ShardingManager(num_shards=4, db=db, mode="routing")
+    _, tx_id = sh.add_transaction({"from": sender, "to": recipient, "value": 10.0})
+    assert tx_id
+    assert sh.cross_shard_txs[tx_id].status == "confirmed"
+    assert db.get_balance(sender) == 40.0
+    assert db.get_balance(recipient) == 10.0

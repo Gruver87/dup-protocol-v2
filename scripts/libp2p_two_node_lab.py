@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""2-node dual-stack lab smoke (ADR 0018 / 0019).
+
+Simulates two lab peers selecting transport via DualStackDialer.
+Does not replace docker_prod_3node TCP+TLS mesh.
+
+Usage:
+  python scripts/libp2p_two_node_lab.py
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from network.transport.dual_stack import DualStackDialer
+from network.transport.errors import TransportCapabilityError
+from network.transport.types import PeerEndpoint
+
+
+def main() -> int:
+    # Default industrial path
+    n1 = DualStackDialer(feature_libp2p=False)
+    n2 = DualStackDialer(feature_libp2p=False)
+    assert n1.active_kind == "native_tcp_tls"
+    assert n2.active_kind == "native_tcp_tls"
+    h1 = n1.dial(PeerEndpoint(host="127.0.0.1", port=5002, peer_id="node2"))
+    h2 = n2.dial(PeerEndpoint(host="127.0.0.1", port=5001, peer_id="node1"))
+    assert h1["kind"] == "native_tcp_tls"
+    assert h2["kind"] == "native_tcp_tls"
+
+    # Lab libp2p path (both peers opt-in)
+    l1 = DualStackDialer(feature_libp2p=True)
+    l2 = DualStackDialer(feature_libp2p=True)
+    assert l1.active_kind == "libp2p"
+    try:
+        if l1.libp2p.rust_backend:
+            # Without listeners, real dials fail closed — selector still libp2p.
+            for dialer in (l1, l2):
+                try:
+                    dialer.dial(PeerEndpoint(host="127.0.0.1", port=39991, peer_id="x"))
+                    print("FAIL: expected fail-closed rust dial")
+                    return 1
+                except TransportCapabilityError:
+                    pass
+            phase_note = "rust_fail_closed_without_listener"
+        else:
+            for dialer in (l1, l2):
+                try:
+                    dialer.dial(PeerEndpoint(host="127.0.0.1", port=4002, peer_id="lab"))
+                    print("FAIL: dial without rust libp2p must refuse (no stub handle)")
+                    return 1
+                except TransportCapabilityError:
+                    pass
+            phase_note = "no_rust_refuse"
+    finally:
+        l1.libp2p.close()
+        l2.libp2p.close()
+
+    print("OK: libp2p_two_node_lab PASS")
+    print("  default pair: native_tcp_tls")
+    print(f"  feature pair: libp2p ({phase_note})")
+    print("  honesty: not prod mesh libp2p; docker_prod_3node unchanged")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

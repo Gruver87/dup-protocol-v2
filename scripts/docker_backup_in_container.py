@@ -1,0 +1,124 @@
+#!/usr/bin/env python3
+"""In-container RocksDB checkpoint backup (stdin pipe, no repo scripts required)."""
+
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import sys
+import time
+from pathlib import Path
+
+# Prod image WORKDIR is /app; script may be invoked from a bind mount path.
+_APP = Path("/app")
+if _APP.is_dir() and str(_APP) not in sys.path:
+    sys.path.insert(0, str(_APP))
+
+
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in ("1", "true", "yes")
+
+
+def _open_engine(chainstore: str):
+    import abs_native  # type: ignore
+
+    prefer_ro = not _truthy("READ_WRITE")
+    if _truthy("READ_ONLY"):
+        prefer_ro = True
+
+    base = {"create_if_missing": False, "sync_writes": False}
+    if prefer_ro:
+        try:
+            return abs_native.RocksEngine(chainstore, read_only=True, **base)
+        except TypeError:
+            pass
+    try:
+        return abs_native.RocksEngine(chainstore, **base)
+    except TypeError as exc:
+        if prefer_ro:
+            print(
+                "FAIL: read_only not supported; rebuild prod image or set READ_WRITE=1",
+                file=sys.stderr,
+            )
+            raise SystemExit(1) from exc
+        raise
+
+
+def _prepare_backup_dest(dest_root: str, out_chain: str) -> None:
+    """Clear prior backup files without removing a bind-mounted dest_root."""
+    os.makedirs(dest_root, exist_ok=True)
+    if os.path.isdir(out_chain):
+        shutil.rmtree(out_chain)
+    manifest = os.path.join(dest_root, "backup_manifest.json")
+    if os.path.isfile(manifest):
+        os.remove(manifest)
+
+
+def main() -> int:
+    data_dir = os.environ.get("DATA_DIR", "/app/data").strip()
+    dest_root = os.environ.get("BACKUP_DEST", "").strip()
+    if not dest_root:
+        print("FAIL: set BACKUP_DEST", file=sys.stderr)
+        return 1
+
+    chainstore = os.path.join(data_dir, "chainstore")
+    if not os.path.isdir(chainstore):
+        print(f"FAIL: missing {chainstore}", file=sys.stderr)
+        return 1
+
+    try:
+        import abs_native  # type: ignore  # noqa: F401
+    except Exception as exc:
+        print(f"FAIL: abs_native unavailable ({exc})", file=sys.stderr)
+        return 1
+
+    out_chain = os.path.join(dest_root, "chainstore")
+    _prepare_backup_dest(dest_root, out_chain)
+
+    engine = _open_engine(chainstore)
+    engine.checkpoint(out_chain)
+
+    aux_src = os.path.join(chainstore, "aux.db")
+    if os.path.isfile(aux_src):
+        shutil.copy2(aux_src, os.path.join(out_chain, "aux.db"))
+
+    tip = 0
+    try:
+        from storage.chain_backup import read_chain_tip
+
+        tip = read_chain_tip(out_chain)
+    except Exception:
+        try:
+            from storage.rocks_store import RocksChainStore
+
+            store = RocksChainStore(out_chain, synchronous="FULL")
+            store.initialize()
+            try:
+                tip = int(store.get_chain_tip() or 0)
+            finally:
+                store.close()
+        except Exception:
+            tip = 0
+
+    manifest = {
+        "engine": "rocksdb",
+        "layout": "nested",
+        "source": data_dir,
+        "created_at": int(time.time()),
+        "chain_tip": tip,
+        "files": ["chainstore/"],
+    }
+    if os.path.isfile(os.path.join(out_chain, "aux.db")):
+        manifest["files"].append("chainstore/aux.db")
+
+    manifest_path = os.path.join(dest_root, "backup_manifest.json")
+    with open(manifest_path, "w", encoding="utf-8") as fh:
+        json.dump(manifest, fh, indent=2)
+
+    print(f"OK: engine=rocksdb tip={tip} dest={dest_root}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,70 @@
+[package]
+name = "abs_native"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "abs_native"
+# rlib: cargo test / cargo-fuzz; cdylib: maturin wheel
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# extension-module: maturin wheels (CPython loads the cdylib; do not link libpython).
+# cargo test / clippy --all-targets MUST use --no-default-features so PyO3 links
+# the interpreter at PYO3_PYTHON. Canonical runner: scripts/cargo_test_abs_native.py
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
+# cargo test / embedding: initialize CPython on first GIL (incompatible with extension-module)
+auto-initialize = ["pyo3/auto-initialize"]
+# ADR 0019/0020 — rust-libp2p swarm (Experimental industrial mesh; Hybrid pin stays off)
+libp2p = ["dep:libp2p", "dep:tokio", "dep:futures", "dep:async-trait"]
+
+[dependencies]
+hex = "0.4"
+k256 = { version = "0.13", features = ["ecdsa"] }
+pyo3 = { version = "0.22", features = ["abi3-py310"] }
+rocksdb = "0.22"
+rustls = { version = "0.23.45", default-features = false, features = ["ring", "std", "tls12"] }
+rustls-pemfile = "2"
+x509-parser = "0.16"
+serde_json = "1"
+borsh = { version = "1.5", features = ["derive"] }
+sha2 = "0.10"
+socket2 = { version = "0.5", features = ["all"] }
+tiny-keccak = { version = "2", features = ["keccak"] }
+primitive-types = "0.12"
+num-bigint = "0.4"
+num-traits = "0.2"
+rust_decimal = { version = "1", default-features = false, features = ["std"] }
+libp2p = { version = "0.54", optional = true, default-features = false, features = [
+    "tokio",
+    "tcp",
+    "noise",
+    "yamux",
+    "ping",
+    "identify",
+    "request-response",
+    "gossipsub",
+    "mdns",
+    "kad",
+    "relay",
+    "autonat",
+    "dcutr",
+    "rendezvous",
+    "dns",
+    "quic",
+    "websocket",
+    "upnp",
+    "macros",
+] }
+tokio = { version = "1", optional = true, features = ["rt-multi-thread", "macros", "sync", "time"] }
+futures = { version = "0.3", optional = true }
+async-trait = { version = "0.1", optional = true }
+
+[dev-dependencies]
+rand = "0.8"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

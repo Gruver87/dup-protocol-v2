@@ -1,0 +1,1749 @@
+//! Fail-closed P2P wire envelope parse/encode (newline-delimited).
+//!
+//! v1: NDJSON `{"type":...,"data":...}\n`
+//! v2: `AB2:` + hex(Borsh WireEnvelopeV2) + `\n` (ADR 0008 dual-stack)
+
+use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use serde_json::Value;
+use std::collections::HashSet;
+
+use crate::hotpath::{decode_wire_v2_inner, encode_wire_v2_inner};
+
+pub(crate) const DEFAULT_MAX_P2P_LINE_BYTES: usize = 2 * 1024 * 1024;
+pub(crate) const MIN_P2P_LINE_BYTES: usize = 4096;
+pub(crate) const MAX_P2P_LINE_BYTES: usize = 16 * 1024 * 1024;
+pub(crate) const MAX_P2P_TYPE_LEN: usize = 64;
+/// Line prefix for Borsh wire codec v2 (≠ `{`, safe for read_line dual-stack).
+pub(crate) const WIRE_V2_LINE_PREFIX: &str = "AB2:";
+
+pub(crate) fn clamp_max_bytes(max_bytes: usize) -> usize {
+    max_bytes.clamp(MIN_P2P_LINE_BYTES, MAX_P2P_LINE_BYTES)
+}
+
+fn is_wire_codec_v2(codec: &str) -> bool {
+    matches!(
+        codec.trim().to_ascii_lowercase().as_str(),
+        "v2" | "borsh" | "wire_v2"
+    )
+}
+
+pub(crate) fn encode_p2p_wire_message_v2_inner(
+    msg_type: &str,
+    data_json: &str,
+) -> Result<Vec<u8>, String> {
+    if msg_type.is_empty() || msg_type.len() > MAX_P2P_TYPE_LEN {
+        return Err("p2p_type_invalid".to_string());
+    }
+    // Validate JSON (or null) then store raw UTF-8 as Borsh payload.
+    let payload_bytes: Vec<u8> = if data_json.trim().is_empty() {
+        b"null".to_vec()
+    } else {
+        let _: Value =
+            serde_json::from_str(data_json).map_err(|e| format!("p2p_data_json_invalid: {e}"))?;
+        data_json.as_bytes().to_vec()
+    };
+    let body = encode_wire_v2_inner(msg_type, &payload_bytes)?;
+    let hex_body = hex::encode(body);
+    let mut out = String::with_capacity(WIRE_V2_LINE_PREFIX.len() + hex_body.len() + 1);
+    out.push_str(WIRE_V2_LINE_PREFIX);
+    out.push_str(&hex_body);
+    out.push('\n');
+    let bytes = out.into_bytes();
+    if bytes.len() > MAX_P2P_LINE_BYTES {
+        return Err(format!(
+            "p2p_line_too_large: {} > {} bytes",
+            bytes.len(),
+            MAX_P2P_LINE_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+pub(crate) fn encode_p2p_wire_by_codec(
+    msg_type: &str,
+    data_json: &str,
+    codec: &str,
+) -> Result<Vec<u8>, String> {
+    // `auto` without a peer context falls back to v1 (bootstrap). Callers that
+    // know the peer must pass resolve_outbound_codec(...) first.
+    if is_wire_codec_v2(codec) {
+        encode_p2p_wire_message_v2_inner(msg_type, data_json)
+    } else {
+        encode_p2p_wire_message_inner(msg_type, data_json)
+    }
+}
+
+pub(crate) fn parse_p2p_wire_v2_line(
+    text: &str,
+    allowed_types: Option<&HashSet<String>>,
+) -> Result<(String, Value), String> {
+    let hex_part = text
+        .strip_prefix(WIRE_V2_LINE_PREFIX)
+        .ok_or_else(|| "p2p_v2_prefix_missing".to_string())?
+        .trim();
+    if hex_part.is_empty() {
+        return Err("p2p_v2_empty".to_string());
+    }
+    let body = hex::decode(hex_part).map_err(|e| format!("p2p_v2_hex_invalid: {e}"))?;
+    let env = decode_wire_v2_inner(&body)?;
+    if env.msg_type.is_empty() || env.msg_type.len() > MAX_P2P_TYPE_LEN {
+        return Err("p2p_type_invalid".to_string());
+    }
+    if let Some(allowed) = allowed_types {
+        if !allowed.is_empty() && !allowed.contains(&env.msg_type) {
+            return Err(format!("p2p_type_not_allowed: {}", env.msg_type));
+        }
+    }
+    let data: Value = if env.payload.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&env.payload)
+            .map_err(|e| format!("p2p_v2_payload_json_invalid: {e}"))?
+    };
+    Ok((env.msg_type, data))
+}
+
+/// Parse one P2P line. Returns `(msg_type, data, wire_codec)` where codec is `"v1"` or `"v2"`.
+pub(crate) fn parse_p2p_wire_line_inner(
+    line: &[u8],
+    max_bytes: usize,
+    allowed_types: Option<&HashSet<String>>,
+) -> Result<(String, Value, &'static str), String> {
+    let limit = clamp_max_bytes(max_bytes);
+    if line.len() > limit {
+        return Err(format!(
+            "p2p_line_too_large: {} > {} bytes",
+            line.len(),
+            limit
+        ));
+    }
+    let text = std::str::from_utf8(line)
+        .map_err(|_| "p2p_line_not_utf8".to_string())?
+        .trim()
+        .trim_end_matches('\0');
+    if text.is_empty() {
+        return Err("p2p_line_empty".to_string());
+    }
+    // Dual-stack auto-detect: Borsh v2 line vs legacy NDJSON.
+    if text.starts_with(WIRE_V2_LINE_PREFIX) {
+        let (msg_type, data) = parse_p2p_wire_v2_line(text, allowed_types)?;
+        return Ok((msg_type, data, "v2"));
+    }
+    let value: Value = serde_json::from_str(text).map_err(|e| format!("p2p_json_invalid: {e}"))?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| "p2p_envelope_not_object".to_string())?;
+    let msg_type = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| "p2p_type_missing_or_not_string".to_string())?;
+    if msg_type.is_empty() || msg_type.len() > MAX_P2P_TYPE_LEN {
+        return Err("p2p_type_invalid".to_string());
+    }
+    if let Some(allowed) = allowed_types {
+        if !allowed.is_empty() && !allowed.contains(msg_type) {
+            return Err(format!("p2p_type_not_allowed: {msg_type}"));
+        }
+    }
+    let data = obj.get("data").cloned().unwrap_or(Value::Null);
+    Ok((msg_type.to_string(), data, "v1"))
+}
+
+/// Resolve outbound codec: `auto` → peer's last inbound codec; else explicit v1/v2.
+pub(crate) fn resolve_outbound_codec(requested: &str, peer_codec: &str) -> &'static str {
+    let req = requested.trim().to_ascii_lowercase();
+    if req.is_empty() || req == "auto" {
+        return if is_wire_codec_v2(peer_codec) {
+            "v2"
+        } else {
+            "v1"
+        };
+    }
+    if is_wire_codec_v2(&req) {
+        "v2"
+    } else {
+        "v1"
+    }
+}
+
+pub(crate) fn encode_p2p_wire_message_inner(
+    msg_type: &str,
+    data_json: &str,
+) -> Result<Vec<u8>, String> {
+    if msg_type.is_empty() || msg_type.len() > MAX_P2P_TYPE_LEN {
+        return Err("p2p_type_invalid".to_string());
+    }
+    let data: Value = if data_json.trim().is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_str(data_json).map_err(|e| format!("p2p_data_json_invalid: {e}"))?
+    };
+    let mut envelope = serde_json::Map::new();
+    envelope.insert("type".to_string(), Value::String(msg_type.to_string()));
+    envelope.insert("data".to_string(), data);
+    let mut encoded = serde_json::to_string(&Value::Object(envelope))
+        .map_err(|e| format!("p2p_encode_failed: {e}"))?;
+    encoded.push('\n');
+    let bytes = encoded.into_bytes();
+    if bytes.len() > MAX_P2P_LINE_BYTES {
+        return Err(format!(
+            "p2p_line_too_large: {} > {} bytes",
+            bytes.len(),
+            MAX_P2P_LINE_BYTES
+        ));
+    }
+    Ok(bytes)
+}
+
+#[pyfunction]
+#[pyo3(signature = (line, max_bytes=DEFAULT_MAX_P2P_LINE_BYTES, allowed_types=None))]
+fn parse_p2p_wire_line(
+    py: Python<'_>,
+    line: &[u8],
+    max_bytes: usize,
+    allowed_types: Option<Vec<String>>,
+) -> PyResult<Option<PyObject>> {
+    let allowed_set = allowed_types.map(|items| items.into_iter().collect::<HashSet<_>>());
+    match parse_p2p_wire_line_inner(line, max_bytes, allowed_set.as_ref()) {
+        Ok((msg_type, data, wire_codec)) => {
+            let dict = PyDict::new_bound(py);
+            dict.set_item("type", msg_type)?;
+            dict.set_item("wire_codec", wire_codec)?;
+            let data_json = serde_json::to_string(&data)
+                .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+            let data_obj = pyo3::types::PyModule::import_bound(py, "json")?
+                .getattr("loads")?
+                .call1((data_json,))?;
+            dict.set_item("data", data_obj)?;
+            Ok(Some(dict.into_any().unbind()))
+        }
+        Err(err) if err.starts_with("p2p_line_too_large") => {
+            Err(pyo3::exceptions::PyValueError::new_err(err))
+        }
+        Err(_) => Ok(None),
+    }
+}
+
+#[pyfunction]
+fn encode_p2p_wire_message(msg_type: String, data_json: String) -> PyResult<Vec<u8>> {
+    encode_p2p_wire_message_inner(&msg_type, &data_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+#[pyo3(signature = (msg_type, data_json, codec="v1"))]
+fn encode_p2p_wire_message_codec(
+    msg_type: String,
+    data_json: String,
+    codec: &str,
+) -> PyResult<Vec<u8>> {
+    encode_p2p_wire_by_codec(&msg_type, &data_json, codec)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn encode_p2p_wire_message_v2(msg_type: String, data_json: String) -> PyResult<Vec<u8>> {
+    encode_p2p_wire_message_v2_inner(&msg_type, &data_json)
+        .map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+#[pyfunction]
+fn p2p_wire_detect_codec(line: &[u8]) -> String {
+    let text = std::str::from_utf8(line).unwrap_or("").trim();
+    if text.starts_with(WIRE_V2_LINE_PREFIX) {
+        "v2".to_string()
+    } else {
+        "v1".to_string()
+    }
+}
+
+#[pyfunction]
+fn hash_sorted_json(obj_json: String) -> PyResult<String> {
+    let value: Value = serde_json::from_str(&obj_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let encoded = sorted_compact_json(&value)?;
+    Ok(crate::hash_string(&encoded))
+}
+
+fn sorted_compact_json(value: &Value) -> PyResult<String> {
+    let sorted = sort_keys_value(value);
+    serde_json::to_string(&sorted)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))
+}
+
+fn sort_keys_value(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let mut sorted = serde_json::Map::new();
+            let mut keys: Vec<&String> = map.keys().collect();
+            keys.sort();
+            for key in keys {
+                if let Some(item) = map.get(key) {
+                    sorted.insert(key.clone(), sort_keys_value(item));
+                }
+            }
+            Value::Object(sorted)
+        }
+        Value::Array(items) => Value::Array(items.iter().map(sort_keys_value).collect()),
+        other => other.clone(),
+    }
+}
+
+#[pyfunction]
+fn verify_attestation_secp256k1(
+    attestation_json: String,
+    signature_der: Vec<u8>,
+    public_key_xy: Vec<u8>,
+) -> PyResult<bool> {
+    let value: Value = serde_json::from_str(&attestation_json)
+        .map_err(|e| pyo3::exceptions::PyValueError::new_err(e.to_string()))?;
+    let obj = value
+        .as_object()
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("attestation must be object"))?;
+    let mut payload = serde_json::Map::new();
+    for key in ["validator", "target_hash", "target_height", "slot"] {
+        if let Some(item) = obj.get(key) {
+            payload.insert(key.to_string(), item.clone());
+        } else {
+            payload.insert(key.to_string(), Value::Null);
+        }
+    }
+    let encoded = sorted_compact_json(&Value::Object(payload))?;
+    let digest = crate::hash_string(&encoded);
+    Ok(crate::verify_secp256k1_sha256_inner(
+        digest.as_bytes(),
+        &signature_der,
+        &public_key_xy,
+    ))
+}
+
+const MAX_P2P_HASH_LEN: usize = 128;
+const MAX_P2P_ADDR_LEN: usize = 128;
+const MAX_P2P_HEX_SIG_LEN: usize = 512;
+const MAX_P2P_HEX_PUBKEY_LEN: usize = 130;
+const MAX_P2P_HEIGHT: i64 = 1_000_000_000_000;
+
+fn json_i64(value: &Value) -> Option<i64> {
+    match value {
+        Value::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().map(|u| u as i64))
+            .or_else(|| n.as_f64().map(|f| f as i64)),
+        Value::String(s) => s.parse::<i64>().ok(),
+        _ => None,
+    }
+}
+
+fn is_hex(s: &str) -> bool {
+    !s.is_empty() && s.len().is_multiple_of(2) && s.bytes().all(|b| b.is_ascii_hexdigit())
+}
+
+pub(crate) fn validate_status_inner(data: &Value) -> Option<(i64, String)> {
+    let obj = data.as_object()?;
+    let height = obj.get("height").and_then(json_i64).unwrap_or(0);
+    if !(0..=MAX_P2P_HEIGHT).contains(&height) {
+        return None;
+    }
+    let head_hash = obj
+        .get("head_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if head_hash.len() > MAX_P2P_HASH_LEN {
+        return None;
+    }
+    Some((height, head_hash))
+}
+
+pub(crate) fn validate_attestation_shape_inner(data: &Value) -> bool {
+    let Some(obj) = data.as_object() else {
+        return false;
+    };
+    let validator = match obj.get("validator").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() && s.len() <= MAX_P2P_ADDR_LEN => s,
+        _ => return false,
+    };
+    let _ = validator;
+    let target_hash = match obj.get("target_hash").and_then(|v| v.as_str()) {
+        Some(s) if !s.is_empty() && s.len() <= MAX_P2P_HASH_LEN => s,
+        _ => return false,
+    };
+    let _ = target_hash;
+    if let Some(h) = obj.get("target_height") {
+        let Some(height) = json_i64(h) else {
+            return false;
+        };
+        if !(0..=MAX_P2P_HEIGHT).contains(&height) {
+            return false;
+        }
+    }
+    if let Some(s) = obj.get("slot") {
+        let Some(slot) = json_i64(s) else {
+            return false;
+        };
+        if !(0..=MAX_P2P_HEIGHT).contains(&slot) {
+            return false;
+        }
+    }
+    let signature = match obj.get("signature").and_then(|v| v.as_str()) {
+        Some(s) if is_hex(s) && s.len() <= MAX_P2P_HEX_SIG_LEN => s,
+        _ => return false,
+    };
+    let _ = signature;
+    let public_key = match obj.get("public_key").and_then(|v| v.as_str()) {
+        Some(s) if is_hex(s) && s.len() <= MAX_P2P_HEX_PUBKEY_LEN => s,
+        _ => return false,
+    };
+    let _ = public_key;
+    true
+}
+
+/// v1.3.117: identity + secp256k1 sig over canonical attestation fields (after shape).
+/// Reasons: `bad_attestation_identity` | `bad_attestation_sig`.
+pub(crate) fn verify_attestation_semantics_inner(data: &Value) -> Result<(), String> {
+    use sha2::{Digest, Sha256};
+
+    if !validate_attestation_shape_inner(data) {
+        return Err("bad_attestation_shape".to_string());
+    }
+    let obj = data
+        .as_object()
+        .ok_or_else(|| "bad_attestation_shape".to_string())?;
+    let claimed = obj
+        .get("validator")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    if claimed.is_empty() {
+        return Err("bad_attestation_identity".to_string());
+    }
+    let sig_hex = obj.get("signature").and_then(|v| v.as_str()).unwrap_or("");
+    let pk_hex = obj.get("public_key").and_then(|v| v.as_str()).unwrap_or("");
+    let signature = hex::decode(sig_hex).map_err(|_| "bad_attestation_sig".to_string())?;
+    let public_key = hex::decode(pk_hex).map_err(|_| "bad_attestation_sig".to_string())?;
+    // Parity with KeyGenerator.derive_address: "0x" + sha256_hex(pubkey)[-40:]
+    let pk_digest = hex::encode(Sha256::digest(&public_key));
+    let derived = format!("0x{}", &pk_digest[pk_digest.len().saturating_sub(40)..]);
+    if derived.to_ascii_lowercase() != claimed {
+        return Err("bad_attestation_identity".to_string());
+    }
+    let mut payload = serde_json::Map::new();
+    for key in ["validator", "target_hash", "target_height", "slot"] {
+        if let Some(item) = obj.get(key) {
+            payload.insert(key.to_string(), item.clone());
+        } else {
+            payload.insert(key.to_string(), Value::Null);
+        }
+    }
+    let encoded = sorted_compact_json(&Value::Object(payload))
+        .map_err(|_| "bad_attestation_sig".to_string())?;
+    let msg_digest = crate::hash_string(&encoded);
+    if !crate::verify_secp256k1_sha256_inner(msg_digest.as_bytes(), &signature, &public_key) {
+        return Err("bad_attestation_sig".to_string());
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn validate_p2p_status_payload(py: Python<'_>, data_json: String) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((height, head_hash)) = validate_status_inner(&value) else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("height", height)?;
+    dict.set_item("head_hash", head_hash)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_attestation_payload(data_json: String) -> PyResult<bool> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    Ok(validate_attestation_shape_inner(&value))
+}
+
+const MAX_P2P_BLOCK_TXS: usize = 10_000;
+
+pub(crate) fn validate_block_announce_inner(data: &Value) -> Option<(i64, String)> {
+    let obj = data.as_object()?;
+    let height = obj
+        .get("height")
+        .or_else(|| obj.get("number"))
+        .and_then(json_i64)
+        .unwrap_or(0);
+    if !(0..=MAX_P2P_HEIGHT).contains(&height) {
+        return None;
+    }
+    let block_hash = obj
+        .get("hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if block_hash.is_empty() || block_hash.len() > MAX_P2P_HASH_LEN {
+        return None;
+    }
+    if let Some(parent) = obj.get("parent_hash").or_else(|| obj.get("parent")) {
+        if let Some(s) = parent.as_str() {
+            if s.len() > MAX_P2P_HASH_LEN {
+                return None;
+            }
+        } else if !parent.is_null() {
+            return None;
+        }
+    }
+    if let Some(root) = obj.get("state_root") {
+        if let Some(s) = root.as_str() {
+            if s.len() > MAX_P2P_HASH_LEN {
+                return None;
+            }
+        } else if !root.is_null() {
+            return None;
+        }
+    }
+    if let Some(txs) = obj.get("transactions") {
+        let arr = txs.as_array()?;
+        if arr.len() > MAX_P2P_BLOCK_TXS {
+            return None;
+        }
+    }
+    Some((height, block_hash))
+}
+
+/// v1.3.120: claimed hash must match canonical recompute (import_block parity).
+/// Parent/height continuity / proposer / state_root validity stay Python.
+pub(crate) fn verify_block_announce_semantics_inner(data: &Value) -> Result<(), String> {
+    let Some((_, claimed)) = validate_block_announce_inner(data) else {
+        return Err("bad_block_announce".to_string());
+    };
+    let recomputed =
+        crate::recomputed_canonical_block_hash(data).map_err(|_| "bad_block_hash".to_string())?;
+    if recomputed != claimed {
+        return Err("bad_block_hash".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_state_root_request_inner(data: &Value) -> Option<i64> {
+    let obj = data.as_object()?;
+    let height = obj.get("height").and_then(json_i64).unwrap_or(0);
+    if !(0..=MAX_P2P_HEIGHT).contains(&height) {
+        return None;
+    }
+    Some(height)
+}
+
+pub(crate) fn validate_state_root_response_inner(data: &Value) -> Option<(i64, String, String)> {
+    let obj = data.as_object()?;
+    let height = obj.get("height").and_then(json_i64).unwrap_or(0);
+    if !(0..=MAX_P2P_HEIGHT).contains(&height) {
+        return None;
+    }
+    let state_root = obj
+        .get("state_root")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if state_root.len() > MAX_P2P_HASH_LEN {
+        return None;
+    }
+    let head_hash = obj
+        .get("head_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if head_hash.len() > MAX_P2P_HASH_LEN {
+        return None;
+    }
+    Some((height, state_root, head_hash))
+}
+
+/// Exactly 32-byte digest as 64 hex chars (optional `0x` prefix).
+fn is_digest32_hex(s: &str) -> bool {
+    let t = s.trim();
+    let t = t
+        .strip_prefix("0x")
+        .or_else(|| t.strip_prefix("0X"))
+        .unwrap_or(t);
+    t.len() == 64 && is_hex(t)
+}
+
+/// v1.3.123: state_root + head_hash must be 32-byte hex digests.
+/// Request height correlation is v1.3.127; root-belongs-to-head stays Python.
+pub(crate) fn verify_state_root_response_semantics_inner(data: &Value) -> Result<(), String> {
+    let Some((_height, state_root, head_hash)) = validate_state_root_response_inner(data) else {
+        return Err("bad_state_root_response".to_string());
+    };
+    if !is_digest32_hex(&state_root) || !is_digest32_hex(&head_hash) {
+        return Err("bad_state_root_digest".to_string());
+    }
+    Ok(())
+}
+
+/// v1.3.127: request-bound state_root_response — height must match probe + digests OK.
+/// v1.3.130: optional expected_head soft match (empty expected = skip; not root-belongs-to-head proof).
+pub(crate) fn verify_state_root_response_request_semantics_inner(
+    data: &Value,
+    expected_height: i64,
+    expected_head: &str,
+) -> Result<(), String> {
+    verify_state_root_response_semantics_inner(data)?;
+    let Some((height, _state_root, head_hash)) = validate_state_root_response_inner(data) else {
+        return Err("bad_state_root_response".to_string());
+    };
+    if height != expected_height {
+        return Err("bad_state_root_response_height".to_string());
+    }
+    let exp = expected_head.trim();
+    if !exp.is_empty() && normalize_hash_cmp(&head_hash) != normalize_hash_cmp(exp) {
+        return Err("bad_state_root_response_head".to_string());
+    }
+    Ok(())
+}
+
+/// v1.3.124: non-empty status.head_hash must be a 32-byte hex digest.
+/// Empty / null / non-object keepalives stay OK (genesis may advertise "").
+pub(crate) fn verify_status_head_hash_semantics_inner(data: &Value) -> Result<(), String> {
+    if data.is_null() || !data.is_object() {
+        return Ok(());
+    }
+    let Some((_height, head_hash)) = validate_status_inner(data) else {
+        return Err("bad_status_payload".to_string());
+    };
+    if head_hash.is_empty() {
+        return Ok(());
+    }
+    if !is_digest32_hex(&head_hash) {
+        return Err("bad_status_head_digest".to_string());
+    }
+    Ok(())
+}
+
+/// v1.3.128: soft height↔head binding for status (not tip existence proof).
+/// If height > 0, head_hash must be a non-empty 32-byte digest.
+pub(crate) fn verify_status_height_head_binding_inner(data: &Value) -> Result<(), String> {
+    if data.is_null() || !data.is_object() {
+        return Ok(());
+    }
+    let Some((height, head_hash)) = validate_status_inner(data) else {
+        return Err("bad_status_payload".to_string());
+    };
+    if height <= 0 {
+        return verify_status_head_hash_semantics_inner(data);
+    }
+    if head_hash.is_empty() {
+        return Err("bad_status_height_head".to_string());
+    }
+    verify_status_head_hash_semantics_inner(data)
+}
+
+/// v1.3.128: handshake head_hash digest + soft height binding (rejection ack exempt).
+pub(crate) fn verify_handshake_head_semantics_inner(data: &Value) -> Result<(), String> {
+    let Some((_chain_id, height, head_hash, _node_id, _p2p_port, accepted)) =
+        validate_handshake_inner(data)
+    else {
+        return Err("bad_handshake_payload".to_string());
+    };
+    if !accepted {
+        return Ok(());
+    }
+    if height <= 0 {
+        // Genesis may omit head; if present it must be a digest (no garbage).
+        if !head_hash.is_empty() && !is_digest32_hex(&head_hash) {
+            return Err("bad_handshake_head_digest".to_string());
+        }
+        return Ok(());
+    }
+    if head_hash.is_empty() {
+        return Err("bad_handshake_height_head".to_string());
+    }
+    if !is_digest32_hex(&head_hash) {
+        return Err("bad_handshake_head_digest".to_string());
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn validate_p2p_block_announce(py: Python<'_>, data_json: String) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((height, block_hash)) = validate_block_announce_inner(&value) else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("height", height)?;
+    dict.set_item("hash", block_hash)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_state_root_request(data_json: String) -> PyResult<Option<i64>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(validate_state_root_request_inner(&value))
+}
+
+#[pyfunction]
+fn validate_p2p_state_root_response(
+    py: Python<'_>,
+    data_json: String,
+) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((height, state_root, head_hash)) = validate_state_root_response_inner(&value) else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("height", height)?;
+    dict.set_item("state_root", state_root)?;
+    dict.set_item("head_hash", head_hash)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+const MAX_P2P_MEMPOOL_TXS: usize = 500;
+const MAX_P2P_NODE_ID_LEN: usize = 128;
+const MAX_P2P_VERSION_LEN: usize = 64;
+const MAX_P2P_SYNC_SPAN: i64 = 10_000;
+const MAX_P2P_PORT: i64 = 65_535;
+
+pub(crate) fn validate_handshake_inner(
+    data: &Value,
+) -> Option<(i64, i64, String, String, i64, bool)> {
+    let obj = data.as_object()?;
+    // Explicit rejection ack (e.g. max_peers) — shape-ok but not a peer identity.
+    if matches!(obj.get("accepted"), Some(Value::Bool(false))) {
+        return Some((-1, 0, String::new(), String::new(), 0, false));
+    }
+    let chain_id = obj.get("chain_id").and_then(json_i64)?;
+    if chain_id < 0 {
+        return None;
+    }
+    let height = obj.get("height").and_then(json_i64).unwrap_or(0);
+    if !(0..=MAX_P2P_HEIGHT).contains(&height) {
+        return None;
+    }
+    let head_hash = obj
+        .get("head_hash")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if head_hash.len() > MAX_P2P_HASH_LEN {
+        return None;
+    }
+    let node_id = obj
+        .get("node_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if node_id.len() > MAX_P2P_NODE_ID_LEN {
+        return None;
+    }
+    if let Some(version) = obj.get("version") {
+        if let Some(s) = version.as_str() {
+            if s.len() > MAX_P2P_VERSION_LEN {
+                return None;
+            }
+        } else if !version.is_null() {
+            return None;
+        }
+    }
+    let p2p_port = obj.get("p2p_port").and_then(json_i64).unwrap_or(0);
+    if !(0..=MAX_P2P_PORT).contains(&p2p_port) {
+        return None;
+    }
+    Some((chain_id, height, head_hash, node_id, p2p_port, true))
+}
+
+pub(crate) fn validate_get_blocks_inner(data: &Value) -> Option<(i64, i64)> {
+    let obj = data.as_object()?;
+    let from_height = obj.get("from_height").and_then(json_i64).unwrap_or(0);
+    let to_height = obj
+        .get("to_height")
+        .and_then(json_i64)
+        .unwrap_or(from_height);
+    if from_height < 0
+        || to_height < 0
+        || from_height > MAX_P2P_HEIGHT
+        || to_height > MAX_P2P_HEIGHT
+    {
+        return None;
+    }
+    if to_height < from_height {
+        return None;
+    }
+    if to_height - from_height > MAX_P2P_SYNC_SPAN {
+        return None;
+    }
+    Some((from_height, to_height))
+}
+
+pub(crate) fn validate_wire_tx_inner(data: &Value) -> bool {
+    let Some(obj) = data.as_object() else {
+        return false;
+    };
+    let from_addr = obj
+        .get("from_addr")
+        .or_else(|| obj.get("from"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let to_addr = obj
+        .get("to_addr")
+        .or_else(|| obj.get("to"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if from_addr.is_empty()
+        || to_addr.is_empty()
+        || from_addr.len() > MAX_P2P_ADDR_LEN
+        || to_addr.len() > MAX_P2P_ADDR_LEN
+    {
+        return false;
+    }
+    if let Some(nonce) = obj.get("nonce") {
+        let Some(n) = json_i64(nonce) else {
+            return false;
+        };
+        if n < 0 {
+            return false;
+        }
+    }
+    if let Some(gas) = obj.get("gas") {
+        let Some(g) = json_i64(gas) else {
+            return false;
+        };
+        if !(0..=50_000_000).contains(&g) {
+            return false;
+        }
+    }
+    for key in ["signature", "public_key"] {
+        if let Some(v) = obj.get(key) {
+            if let Some(s) = v.as_str() {
+                if s.is_empty() {
+                    continue;
+                }
+                if !is_hex(s) || s.len() > MAX_P2P_HEX_SIG_LEN {
+                    return false;
+                }
+            } else if !v.is_null() {
+                return false;
+            }
+        }
+    }
+    if let Some(h) = obj.get("hash").or_else(|| obj.get("tx_hash")) {
+        if let Some(s) = h.as_str() {
+            if !s.is_empty() && s.len() > MAX_P2P_HASH_LEN {
+                return false;
+            }
+        } else if !h.is_null() {
+            return false;
+        }
+    }
+    if let Some(d) = obj.get("data").or_else(|| obj.get("input")) {
+        if let Some(s) = d.as_str() {
+            if s.len() > 2 * 1024 * 1024 {
+                return false;
+            }
+        } else if !d.is_null() {
+            return false;
+        }
+    }
+    true
+}
+
+/// v1.3.118: signature-only semantic gate for singular `new_tx` (mempool batch stays Python).
+/// Uses trusted local `expected_chain_id` in the canonical preimage (ignore wire chain_id).
+pub(crate) fn verify_wire_tx_signature_inner(
+    data: &Value,
+    expected_chain_id: i64,
+    require_signature: bool,
+) -> Result<(), String> {
+    if !validate_wire_tx_inner(data) {
+        return Err("bad_wire_tx".to_string());
+    }
+    let obj = data.as_object().ok_or_else(|| "bad_wire_tx".to_string())?;
+    let sig_hex = obj
+        .get("signature")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let pk_hex = obj
+        .get("public_key")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if sig_hex.is_empty() {
+        if require_signature {
+            return Err("missing_tx_signature".to_string());
+        }
+        return Ok(());
+    }
+    if pk_hex.is_empty() {
+        return Err("missing_tx_public_key".to_string());
+    }
+    let from_addr = obj
+        .get("from")
+        .or_else(|| obj.get("from_addr"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    let to_addr = obj
+        .get("to")
+        .or_else(|| obj.get("to_addr"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if from_addr.is_empty() || to_addr.is_empty() {
+        return Err("bad_wire_tx".to_string());
+    }
+    let value = obj
+        .get("value")
+        .and_then(json_i64)
+        .ok_or_else(|| "bad_tx_signature".to_string())?;
+    let nonce = obj.get("nonce").and_then(json_i64).unwrap_or(0);
+    if nonce < 0 {
+        return Err("bad_tx_signature".to_string());
+    }
+    // Parity with Wallet._canonical_tx_for_hash + local chain_id injection.
+    let mut payload = serde_json::Map::new();
+    payload.insert("from".into(), Value::String(from_addr.to_string()));
+    payload.insert("to".into(), Value::String(to_addr.to_string()));
+    payload.insert("value".into(), Value::Number(value.into()));
+    payload.insert("nonce".into(), Value::Number(nonce.into()));
+    payload.insert("chain_id".into(), Value::Number(expected_chain_id.into()));
+    let data_s = obj
+        .get("data")
+        .or_else(|| obj.get("input"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+    if !data_s.is_empty() {
+        payload.insert("data".into(), Value::String(data_s));
+    }
+    // Parity with Wallet._canonical_tx_for_hash: always bind gas when present
+    // (including 21000) — never treat transfer stub as invisible default.
+    let gas = obj
+        .get("gas_limit")
+        .or_else(|| obj.get("gas"))
+        .and_then(json_i64);
+    if let Some(g) = gas {
+        payload.insert("gas_limit".into(), Value::Number(g.into()));
+    }
+    let encoded = serde_json::to_string(&sort_keys_value(&Value::Object(payload)))
+        .map_err(|_| "bad_tx_signature".to_string())?;
+    let tx_hash = crate::hash_string(&encoded);
+    let signature = hex::decode(sig_hex).map_err(|_| "bad_tx_signature".to_string())?;
+    let public_key = hex::decode(pk_hex).map_err(|_| "bad_tx_signature".to_string())?;
+    if !crate::verify_secp256k1_sha256_inner(tx_hash.as_bytes(), &signature, &public_key) {
+        return Err("bad_tx_signature".to_string());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_mempool_batch_inner(data: &Value) -> Option<usize> {
+    let obj = data.as_object()?;
+    let txs = obj.get("transactions")?.as_array()?;
+    if txs.len() > MAX_P2P_MEMPOOL_TXS {
+        return None;
+    }
+    for tx in txs {
+        if !validate_wire_tx_inner(tx) {
+            return None;
+        }
+    }
+    Some(txs.len())
+}
+
+/// v1.3.119: signature-only semantic gate for every tx in a mempool batch.
+/// Shape must pass first; nonce/balance/ingest stay Python.
+pub(crate) fn verify_mempool_batch_signatures_inner(
+    data: &Value,
+    expected_chain_id: i64,
+    require_signature: bool,
+) -> Result<(), String> {
+    if validate_mempool_batch_inner(data).is_none() {
+        return Err("bad_mempool_batch".to_string());
+    }
+    let txs = data
+        .as_object()
+        .and_then(|o| o.get("transactions"))
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "bad_mempool_batch".to_string())?;
+    for tx in txs {
+        verify_wire_tx_signature_inner(tx, expected_chain_id, require_signature)?;
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn validate_p2p_handshake_payload(py: Python<'_>, data_json: String) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((chain_id, height, head_hash, node_id, p2p_port, accepted)) =
+        validate_handshake_inner(&value)
+    else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("chain_id", chain_id)?;
+    dict.set_item("height", height)?;
+    dict.set_item("head_hash", head_hash)?;
+    dict.set_item("node_id", node_id)?;
+    dict.set_item("p2p_port", p2p_port)?;
+    dict.set_item("accepted", accepted)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_get_blocks_payload(
+    py: Python<'_>,
+    data_json: String,
+) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((from_height, to_height)) = validate_get_blocks_inner(&value) else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("from_height", from_height)?;
+    dict.set_item("to_height", to_height)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_wire_tx(data_json: String) -> PyResult<bool> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(false),
+    };
+    Ok(validate_wire_tx_inner(&value))
+}
+
+#[pyfunction]
+fn validate_p2p_mempool_batch(data_json: String) -> PyResult<Option<usize>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(validate_mempool_batch_inner(&value))
+}
+
+const MAX_P2P_PEERS_LIST: usize = 50;
+const MAX_P2P_PEER_ADDR_LEN: usize = 253;
+const MAX_P2P_BLOCKS_BATCH: usize = 500;
+const MAX_STAKE: f64 = 1e18;
+
+pub(crate) fn validate_validator_register_inner(data: &Value) -> Option<(String, f64, String)> {
+    let obj = data.as_object()?;
+    let address = obj
+        .get("address")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if address.is_empty() || address.len() > MAX_P2P_ADDR_LEN {
+        return None;
+    }
+    let stake = match obj.get("stake") {
+        Some(Value::Number(n)) => n.as_f64().unwrap_or(-1.0),
+        Some(Value::String(s)) => s.parse::<f64>().unwrap_or(-1.0),
+        None => 0.0,
+        _ => return None,
+    };
+    if !stake.is_finite() || !(0.0..=MAX_STAKE).contains(&stake) {
+        return None;
+    }
+    let node_id = obj
+        .get("node_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if node_id.len() > MAX_P2P_NODE_ID_LEN {
+        return None;
+    }
+    Some((address, stake, node_id))
+}
+
+pub(crate) fn validate_peers_list_inner(data: &Value) -> Option<Vec<String>> {
+    let arr = data.as_array()?;
+    if arr.len() > MAX_P2P_PEERS_LIST {
+        return None;
+    }
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        let s = item.as_str()?.trim();
+        if s.is_empty() || s.len() > MAX_P2P_PEER_ADDR_LEN {
+            return None;
+        }
+        let (host, port_s) = s.rsplit_once(':')?;
+        if host.is_empty() {
+            return None;
+        }
+        let port = port_s.parse::<i64>().ok()?;
+        if !(1..=MAX_P2P_PORT).contains(&port) {
+            return None;
+        }
+        out.push(s.to_string());
+    }
+    Some(out)
+}
+
+pub(crate) fn validate_get_block_inner(data: &Value) -> Option<i64> {
+    match data {
+        Value::Number(_) | Value::String(_) => {
+            let h = json_i64(data)?;
+            if !(0..=MAX_P2P_HEIGHT).contains(&h) {
+                return None;
+            }
+            Some(h)
+        }
+        Value::Object(obj) => {
+            let h = obj
+                .get("height")
+                .or_else(|| obj.get("number"))
+                .and_then(json_i64)?;
+            if !(0..=MAX_P2P_HEIGHT).contains(&h) {
+                return None;
+            }
+            Some(h)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn validate_get_block_by_hash_inner(data: &Value) -> Option<String> {
+    let hash = match data {
+        Value::String(s) => s.trim().to_string(),
+        Value::Object(obj) => obj
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string(),
+        _ => return None,
+    };
+    if hash.is_empty() || hash.len() > MAX_P2P_HASH_LEN {
+        return None;
+    }
+    Some(hash)
+}
+
+pub(crate) fn validate_blocks_batch_inner(data: &Value) -> Option<usize> {
+    let arr = data.as_array()?;
+    if arr.len() > MAX_P2P_BLOCKS_BATCH {
+        return None;
+    }
+    for block in arr {
+        validate_block_announce_inner(block)?;
+    }
+    Some(arr.len())
+}
+
+/// v1.3.121: per-block canonical-hash gate for sync `blocks` arrays.
+/// Continuity / import / fork-choice stay Python.
+pub(crate) fn verify_blocks_batch_semantics_inner(data: &Value) -> Result<(), String> {
+    if validate_blocks_batch_inner(data).is_none() {
+        return Err("bad_blocks_batch".to_string());
+    }
+    let arr = data
+        .as_array()
+        .ok_or_else(|| "bad_blocks_batch".to_string())?;
+    for block in arr {
+        verify_block_announce_semantics_inner(block)?;
+    }
+    Ok(())
+}
+
+/// v1.3.125: request-bound `blocks` response — range + continuity + parent chain.
+/// Does not prove tip existence / fork-choice / state_root.
+pub(crate) fn verify_blocks_response_semantics_inner(
+    data: &Value,
+    expected_from: i64,
+    expected_to: i64,
+    expected_parent_hash: &str,
+    allow_empty: bool,
+) -> Result<(), String> {
+    verify_blocks_batch_semantics_inner(data)?;
+    let arr = data
+        .as_array()
+        .ok_or_else(|| "bad_blocks_batch".to_string())?;
+    if arr.is_empty() {
+        if allow_empty {
+            return Ok(());
+        }
+        return Err("empty_blocks_response".to_string());
+    }
+    if expected_from < 0 || expected_to < expected_from {
+        return Err("bad_blocks_response_range".to_string());
+    }
+    let mut prev_hash = String::new();
+    for (idx, block) in arr.iter().enumerate() {
+        let obj = block
+            .as_object()
+            .ok_or_else(|| "bad_blocks_batch".to_string())?;
+        let height = obj
+            .get("height")
+            .or_else(|| obj.get("number"))
+            .and_then(json_i64)
+            .ok_or_else(|| "bad_blocks_response_range".to_string())?;
+        let block_hash = obj
+            .get("hash")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        let parent = obj
+            .get("parent_hash")
+            .or_else(|| obj.get("parent"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if idx == 0 {
+            if height != expected_from {
+                return Err("bad_blocks_response_range".to_string());
+            }
+            let exp = expected_parent_hash.trim();
+            if !exp.is_empty() && parent != exp {
+                return Err("bad_blocks_response_parent".to_string());
+            }
+        } else if height != expected_from + idx as i64 {
+            return Err("bad_blocks_response_continuity".to_string());
+        } else if parent != prev_hash {
+            return Err("bad_blocks_response_parent".to_string());
+        }
+        if height > expected_to {
+            return Err("bad_blocks_response_range".to_string());
+        }
+        prev_hash = block_hash;
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn verify_p2p_blocks_response_semantics(
+    data_json: String,
+    expected_from: i64,
+    expected_to: i64,
+    expected_parent_hash: String,
+    allow_empty: bool,
+) -> PyResult<Option<String>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(Some("bad_blocks_batch".to_string())),
+    };
+    match verify_blocks_response_semantics_inner(
+        &value,
+        expected_from,
+        expected_to,
+        &expected_parent_hash,
+        allow_empty,
+    ) {
+        Ok(()) => Ok(None),
+        Err(reason) => Ok(Some(reason)),
+    }
+}
+
+fn normalize_hash_cmp(s: &str) -> String {
+    let t = s.trim();
+    let t = t
+        .strip_prefix("0x")
+        .or_else(|| t.strip_prefix("0X"))
+        .unwrap_or(t);
+    t.to_ascii_lowercase()
+}
+
+/// v1.3.126: request-bound singular `block` response — claimed hash must match request.
+/// Null = not-found OK when allow_null. Tip proof / fork-choice stay Python.
+pub(crate) fn verify_block_response_semantics_inner(
+    data: &Value,
+    expected_hash: &str,
+    allow_null: bool,
+) -> Result<(), String> {
+    if data.is_null() {
+        if allow_null {
+            return Ok(());
+        }
+        return Err("empty_block_response".to_string());
+    }
+    let exp = expected_hash.trim();
+    if exp.is_empty() {
+        return Err("bad_block_response_expected".to_string());
+    }
+    verify_block_announce_semantics_inner(data)?;
+    let Some((_, claimed)) = validate_block_announce_inner(data) else {
+        return Err("bad_block_announce".to_string());
+    };
+    if normalize_hash_cmp(&claimed) != normalize_hash_cmp(exp) {
+        return Err("bad_block_response_hash".to_string());
+    }
+    Ok(())
+}
+
+#[pyfunction]
+fn verify_p2p_block_response_semantics(
+    data_json: String,
+    expected_hash: String,
+    allow_null: bool,
+) -> PyResult<Option<String>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(Some("bad_block_announce".to_string())),
+    };
+    match verify_block_response_semantics_inner(&value, &expected_hash, allow_null) {
+        Ok(()) => Ok(None),
+        Err(reason) => Ok(Some(reason)),
+    }
+}
+
+#[pyfunction]
+fn verify_p2p_state_root_response_request_semantics(
+    data_json: String,
+    expected_height: i64,
+    expected_head: String,
+) -> PyResult<Option<String>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(Some("bad_state_root_response".to_string())),
+    };
+    match verify_state_root_response_request_semantics_inner(
+        &value,
+        expected_height,
+        &expected_head,
+    ) {
+        Ok(()) => Ok(None),
+        Err(reason) => Ok(Some(reason)),
+    }
+}
+
+#[pyfunction]
+fn verify_p2p_status_height_head_binding(data_json: String) -> PyResult<Option<String>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(Some("bad_status_payload".to_string())),
+    };
+    match verify_status_height_head_binding_inner(&value) {
+        Ok(()) => Ok(None),
+        Err(reason) => Ok(Some(reason)),
+    }
+}
+
+#[pyfunction]
+fn verify_p2p_handshake_head_semantics(data_json: String) -> PyResult<Option<String>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(Some("bad_handshake_payload".to_string())),
+    };
+    match verify_handshake_head_semantics_inner(&value) {
+        Ok(()) => Ok(None),
+        Err(reason) => Ok(Some(reason)),
+    }
+}
+
+#[pyfunction]
+fn validate_p2p_validator_register(
+    py: Python<'_>,
+    data_json: String,
+) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((address, stake, node_id)) = validate_validator_register_inner(&value) else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("address", address)?;
+    dict.set_item("stake", stake)?;
+    dict.set_item("node_id", node_id)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_peers_list(data_json: String) -> PyResult<Option<Vec<String>>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(validate_peers_list_inner(&value))
+}
+
+#[pyfunction]
+fn validate_p2p_get_block(data_json: String) -> PyResult<Option<i64>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(validate_get_block_inner(&value))
+}
+
+#[pyfunction]
+fn validate_p2p_get_block_by_hash(data_json: String) -> PyResult<Option<String>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(validate_get_block_by_hash_inner(&value))
+}
+
+#[pyfunction]
+fn validate_p2p_blocks_batch(data_json: String) -> PyResult<Option<usize>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    Ok(validate_blocks_batch_inner(&value))
+}
+
+const MAX_SHARD_ID: i64 = 1_000_000;
+const MAX_CROSS_SHARD_TX_ID_LEN: usize = 128;
+const MAX_CROSS_SHARD_STATUS_LEN: usize = 64;
+const MAX_CROSS_SHARD_AMOUNT: f64 = 1e18;
+
+fn json_f64_amount(value: &Value) -> Option<f64> {
+    match value {
+        Value::Number(n) => n.as_f64(),
+        Value::String(s) => s.parse::<f64>().ok(),
+        _ => None,
+    }
+}
+
+fn json_shard_id(value: &Value) -> Option<i64> {
+    let id = json_i64(value)?;
+    if !(0..=MAX_SHARD_ID).contains(&id) {
+        return None;
+    }
+    Some(id)
+}
+
+pub(crate) fn validate_cross_shard_tx_inner(
+    data: &Value,
+) -> Option<(String, i64, i64, String, String, f64, String, String)> {
+    let obj = data.as_object()?;
+    let tx_id = obj
+        .get("tx_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if tx_id.is_empty() || tx_id.len() > MAX_CROSS_SHARD_TX_ID_LEN {
+        return None;
+    }
+    let from_shard = obj.get("from_shard").and_then(json_shard_id)?;
+    let to_shard = obj.get("to_shard").and_then(json_shard_id)?;
+    if from_shard == to_shard {
+        return None;
+    }
+    let from_addr = obj
+        .get("from_addr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    let to_addr = obj
+        .get("to_addr")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if from_addr.is_empty()
+        || to_addr.is_empty()
+        || from_addr.len() > MAX_P2P_ADDR_LEN
+        || to_addr.len() > MAX_P2P_ADDR_LEN
+    {
+        return None;
+    }
+    let amount = obj.get("amount").and_then(json_f64_amount)?;
+    if !amount.is_finite() || amount <= 0.0 || amount > MAX_CROSS_SHARD_AMOUNT {
+        return None;
+    }
+    let status = obj
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if status.len() > MAX_CROSS_SHARD_STATUS_LEN {
+        return None;
+    }
+    let source_node = obj
+        .get("source_node")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if source_node.len() > MAX_P2P_NODE_ID_LEN {
+        return None;
+    }
+    Some((
+        tx_id,
+        from_shard,
+        to_shard,
+        from_addr,
+        to_addr,
+        amount,
+        status,
+        source_node,
+    ))
+}
+
+pub(crate) fn validate_cross_shard_ack_inner(
+    data: &Value,
+) -> Option<(String, Option<i64>, Option<i64>, String, String)> {
+    let obj = data.as_object()?;
+    let tx_id = obj
+        .get("tx_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if tx_id.is_empty() || tx_id.len() > MAX_CROSS_SHARD_TX_ID_LEN {
+        return None;
+    }
+    let shard_id = match obj.get("shard_id") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(json_shard_id(v)?),
+    };
+    let to_shard = match obj.get("to_shard") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(json_shard_id(v)?),
+    };
+    let status = obj
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if status.len() > MAX_CROSS_SHARD_STATUS_LEN {
+        return None;
+    }
+    let validator_id = obj
+        .get("validator_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if validator_id.len() > MAX_P2P_NODE_ID_LEN {
+        return None;
+    }
+    Some((tx_id, shard_id, to_shard, status, validator_id))
+}
+
+pub(crate) fn validate_shard_migration_inner(data: &Value) -> Option<(String, i64, i64, f64)> {
+    let obj = data.as_object()?;
+    let msg_type = obj
+        .get("type")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim();
+    if msg_type != "shard_migration" {
+        return None;
+    }
+    let address = obj
+        .get("address")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if address.is_empty() || address.len() > MAX_P2P_ADDR_LEN {
+        return None;
+    }
+    let from_shard = obj.get("from_shard").and_then(json_shard_id)?;
+    let to_shard = obj.get("to_shard").and_then(json_shard_id)?;
+    if from_shard == to_shard {
+        return None;
+    }
+    let balance = obj.get("balance").and_then(json_f64_amount)?;
+    if !balance.is_finite() || balance <= 0.0 || balance > MAX_CROSS_SHARD_AMOUNT {
+        return None;
+    }
+    Some((address, from_shard, to_shard, balance))
+}
+
+#[pyfunction]
+fn validate_p2p_cross_shard_tx(py: Python<'_>, data_json: String) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((tx_id, from_shard, to_shard, from_addr, to_addr, amount, status, source_node)) =
+        validate_cross_shard_tx_inner(&value)
+    else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("tx_id", tx_id)?;
+    dict.set_item("from_shard", from_shard)?;
+    dict.set_item("to_shard", to_shard)?;
+    dict.set_item("from_addr", from_addr)?;
+    dict.set_item("to_addr", to_addr)?;
+    dict.set_item("amount", amount)?;
+    dict.set_item("status", status)?;
+    dict.set_item("source_node", source_node)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_cross_shard_ack(py: Python<'_>, data_json: String) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((tx_id, shard_id, to_shard, status, validator_id)) =
+        validate_cross_shard_ack_inner(&value)
+    else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("tx_id", tx_id)?;
+    if let Some(sid) = shard_id {
+        dict.set_item("shard_id", sid)?;
+    }
+    if let Some(ts) = to_shard {
+        dict.set_item("to_shard", ts)?;
+    }
+    dict.set_item("status", status)?;
+    dict.set_item("validator_id", validator_id)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+#[pyfunction]
+fn validate_p2p_shard_migration(py: Python<'_>, data_json: String) -> PyResult<Option<PyObject>> {
+    let value: Value = match serde_json::from_str(&data_json) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let Some((address, from_shard, to_shard, balance)) = validate_shard_migration_inner(&value)
+    else {
+        return Ok(None);
+    };
+    let dict = PyDict::new_bound(py);
+    dict.set_item("type", "shard_migration")?;
+    dict.set_item("address", address)?;
+    dict.set_item("from_shard", from_shard)?;
+    dict.set_item("to_shard", to_shard)?;
+    dict.set_item("balance", balance)?;
+    Ok(Some(dict.into_any().unbind()))
+}
+
+pub fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(parse_p2p_wire_line, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_p2p_wire_message, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_p2p_wire_message_v2, m)?)?;
+    m.add_function(wrap_pyfunction!(encode_p2p_wire_message_codec, m)?)?;
+    m.add_function(wrap_pyfunction!(p2p_wire_detect_codec, m)?)?;
+    m.add_function(wrap_pyfunction!(hash_sorted_json, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_attestation_secp256k1, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_status_payload, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_attestation_payload, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_block_announce, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_state_root_request, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_state_root_response, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_handshake_payload, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_get_blocks_payload, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_wire_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_mempool_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_validator_register, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_peers_list, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_get_block, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_get_block_by_hash, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_blocks_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_p2p_blocks_response_semantics, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_p2p_block_response_semantics, m)?)?;
+    m.add_function(wrap_pyfunction!(
+        verify_p2p_state_root_response_request_semantics,
+        m
+    )?)?;
+    m.add_function(wrap_pyfunction!(verify_p2p_status_height_head_binding, m)?)?;
+    m.add_function(wrap_pyfunction!(verify_p2p_handshake_head_semantics, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_cross_shard_tx, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_cross_shard_ack, m)?)?;
+    m.add_function(wrap_pyfunction!(validate_p2p_shard_migration, m)?)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_valid_envelope() {
+        let line = br#"{"type":"ping","data":null}"#;
+        let (msg_type, data, codec) = parse_p2p_wire_line_inner(line, 1024 * 1024, None).unwrap();
+        assert_eq!(msg_type, "ping");
+        assert!(data.is_null());
+        assert_eq!(codec, "v1");
+    }
+
+    #[test]
+    fn rejects_oversized() {
+        let line = vec![b'a'; 5000];
+        let err = parse_p2p_wire_line_inner(&line, 4096, None).unwrap_err();
+        assert!(err.contains("p2p_line_too_large"));
+    }
+
+    #[test]
+    fn encode_roundtrip_type() {
+        let bytes = encode_p2p_wire_message_inner("status", r#"{"height":1}"#).unwrap();
+        assert!(bytes.ends_with(b"\n"));
+        let (msg_type, data, codec) = parse_p2p_wire_line_inner(&bytes, 1024 * 1024, None).unwrap();
+        assert_eq!(msg_type, "status");
+        assert_eq!(data["height"], 1);
+        assert_eq!(codec, "v1");
+    }
+
+    #[test]
+    fn encode_roundtrip_v2_ab2_line() {
+        let bytes = encode_p2p_wire_message_v2_inner("new_tx", r#"{"hash":"abc"}"#).unwrap();
+        assert!(bytes.starts_with(b"AB2:"));
+        assert!(bytes.ends_with(b"\n"));
+        let (msg_type, data, codec) = parse_p2p_wire_line_inner(&bytes, 1024 * 1024, None).unwrap();
+        assert_eq!(msg_type, "new_tx");
+        assert_eq!(data["hash"], "abc");
+        assert_eq!(codec, "v2");
+    }
+
+    #[test]
+    fn dual_stack_auto_detect_v1_and_v2() {
+        let v1 = encode_p2p_wire_by_codec("ping", "null", "v1").unwrap();
+        let v2 = encode_p2p_wire_by_codec("ping", "null", "v2").unwrap();
+        assert!(!v1.starts_with(b"AB2:"));
+        assert!(v2.starts_with(b"AB2:"));
+        let (t1, _, c1) = parse_p2p_wire_line_inner(&v1, 1024 * 1024, None).unwrap();
+        let (t2, _, c2) = parse_p2p_wire_line_inner(&v2, 1024 * 1024, None).unwrap();
+        assert_eq!(t1, "ping");
+        assert_eq!(t2, "ping");
+        assert_eq!(c1, "v1");
+        assert_eq!(c2, "v2");
+    }
+
+    #[test]
+    fn resolve_outbound_codec_follows_peer() {
+        assert_eq!(resolve_outbound_codec("auto", "v2"), "v2");
+        assert_eq!(resolve_outbound_codec("auto", "v1"), "v1");
+        assert_eq!(resolve_outbound_codec("v1", "v2"), "v1");
+        assert_eq!(resolve_outbound_codec("v2", "v1"), "v2");
+    }
+}

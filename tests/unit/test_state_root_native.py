@@ -1,0 +1,147 @@
+import json
+
+import pytest
+
+from crypto import native
+from execution.state_root import compute_db_state_root, compute_state_engine_root
+from execution.state_engine import AccountState
+
+
+def _accounts():
+    return [
+        {
+            "address": "0x" + "b" * 40,
+            "balance": 12.3456789012345,
+            "nonce": 2,
+            "code": "6001600055",
+            "storage": '{"slot":"value"}',
+        },
+        {
+            "address": "0x" + "a" * 40,
+            "balance": 100.0,
+            "nonce": 0,
+            "code": None,
+            "storage": None,
+        },
+        {
+            "address": "0x" + "c" * 40,
+            "balance": 0.0000000000014,
+            "nonce": "7",
+            "code": "",
+            "storage": "",
+        },
+    ]
+
+
+def test_db_state_root_matches_python_kernel():
+    accounts = _accounts()
+    expected = native._python_state_root_from_accounts(
+        sorted(accounts, key=lambda row: row["address"])
+    )
+
+    assert compute_db_state_root(accounts) == expected
+    assert len(compute_db_state_root(accounts)) == 64
+
+
+def test_db_state_root_is_address_order_independent():
+    accounts = _accounts()
+
+    assert compute_db_state_root(accounts) == compute_db_state_root(list(reversed(accounts)))
+
+
+def test_installed_abs_native_state_root_matches_python_kernel_when_available():
+    if not native.native_available():
+        return
+
+    import abs_native
+
+    accounts = sorted(_accounts(), key=lambda row: row["address"])
+    # Add balance_satoshi so tip leaves are integer (Wave C native tip path).
+    for row in accounts:
+        row["balance_satoshi"] = int(float(row["balance"]) * 1_000_000)
+    encoded = json.dumps(accounts, sort_keys=True, separators=(",", ":"))
+
+    assert abs_native.state_root_from_accounts_json(encoded) == native._python_state_root_from_accounts(
+        accounts, encoding_version=2
+    )
+
+
+def test_state_root_from_account_blobs_matches_canonical():
+    import json
+
+    from crypto import native
+    from execution.state_root import compute_db_state_root, compute_state_root_from_blobs
+
+    accounts = _accounts()
+    blobs = [
+        json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        for row in accounts
+    ]
+    assert compute_state_root_from_blobs(blobs) == compute_db_state_root(accounts)
+    if native.native_available() and hasattr(__import__("abs_native"), "state_root_from_account_blobs"):
+        assert native.state_root_from_account_blobs(blobs) == compute_db_state_root(accounts)
+
+
+def test_state_root_accumulator_matches_batch_scan():
+    from types import SimpleNamespace
+
+    from crypto import native
+    from execution.state_root import compute_db_state_root
+    from runtime.state_root_encoding import bind_tip_encoding_config, reset_tip_encoding_config
+
+    accounts = _accounts()
+    for row in accounts:
+        row["balance_satoshi"] = int(float(row["balance"]) * 1_000_000)
+    blobs = [
+        json.dumps(row, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        for row in accounts
+    ]
+    if not native.state_root_accumulator_available():
+        return
+    # Native accumulator emits b_satoshi; parity only under tip encoding v2.
+    from runtime.state_root_encoding import clear_tip_encoding_config
+
+    token = bind_tip_encoding_config(
+        SimpleNamespace(state_root_encoding_version=2, state_root_v2_ceremony_ok=True)
+    )
+    try:
+        expected = compute_db_state_root(accounts)
+        assert native.state_root_accumulator_root_from_blobs(blobs) == expected
+        acc = native.new_state_root_accumulator()
+        for blob in blobs:
+            acc.upsert_account_blob(blob)
+        assert acc.root() == expected
+    finally:
+        reset_tip_encoding_config(token)
+        clear_tip_encoding_config()
+
+
+def test_legacy_state_engine_root_keeps_32_char_contract():
+    accounts = {
+        "alice": AccountState(balance=100, nonce=0),
+        "bob": AccountState(balance=50, nonce=3),
+    }
+
+    root = compute_state_engine_root(accounts)
+    assert len(root) == 32
+    assert root == compute_state_engine_root(accounts)
+
+
+def test_native_state_root_from_account_blobs_rejects_too_many_blobs():
+    if not native.native_available():
+        return
+    import abs_native
+
+    payload = [b"{}"] * 1_000_001
+    with pytest.raises(ValueError, match="too_many_account_blobs"):
+        abs_native.state_root_from_account_blobs(payload)
+
+
+def test_native_state_root_from_account_blobs_rejects_huge_blob():
+    if not native.native_available():
+        return
+    import abs_native
+
+    huge_blob = b'{"address":"' + (b"a" * (2 * 1024 * 1024)) + b'"}'
+    with pytest.raises(ValueError, match="account_blob_too_large"):
+        abs_native.state_root_from_account_blobs([huge_blob])

@@ -1,0 +1,226 @@
+# Evidence matrix — what is proven vs not
+
+**Purpose:** separate **automation that exists** from **operational evidence** collected on a live prod mesh.  
+This doc reflects honest status after local prod mesh runs and monitoring — not marketing claims.
+
+**Funds / ПВТ entry:** [DILIGENCE_BRIEF.md](DILIGENCE_BRIEF.md) · [FUND_READINESS.md](FUND_READINESS.md) · brand [BRAND.md](BRAND.md) (**DUP Labs** / **DUP Protocol**; formerly Absolute Blockchain).
+
+---
+
+## Executive summary (2026-09-30)
+
+**Experimental (`Gruver87/dup-protocol-experimental`)** — Phases **1–5 closed** on an industrial private 3-node mesh (chain `778888`, ADR 0020 libp2p Noise). Packaged STRICT 48h PASS: [`lp2pstrict1`](evidence/runs/lp2pstrict1/), [`lrstrict1`](evidence/runs/lrstrict1/), [`evmstrict1`](evidence/runs/evmstrict1/), [`mempool48pass1`](evidence/runs/mempool48pass1/). Default 48h PASS also on disk: [`3c801b87`](evidence/runs/3c801b87/), [`evm48pass1`](evidence/runs/evm48pass1/), [`ind48pass1`](evidence/runs/ind48pass1/), [`lr48pass1`](evidence/runs/lr48pass1/), TCP+TLS [`0a7932c4`](evidence/runs/0a7932c4/). Host: waves 542 + pytest 2734 (2026-09-21); ADR 0021 audit 13/13 [`adr0021gaudit1`](evidence/runs/adr0021gaudit1/).
+
+**Hybrid pin (sibling repo)** — tip-v2 48h PASS [`375d14f`](evidence/runs/375d14f/) (different tree) · Phase 4 binder READY · external firm audit **pending**.
+
+**Public mainnet-ready readiness is not proven.** Missing confirmed evidence for independent external security audit. Not BLS / not EVM-only 48h / not listed ABS.
+
+Historical Jul 2026 operator-local rows below remain on record; do not treat them as Experimental `main` pack claims unless a `docs/evidence/runs/<id>/` directory exists.
+
+---
+
+## Live evidence run (2026-07-12, updated evening)
+
+| Step | Result | Artifact |
+|------|--------|----------|
+| `health_watch.ps1 -ProdMesh -DurationMin 1` | **PASS** | `logs/evidence_health.log` |
+| `prod_mesh_failover.ps1` | **PASS** | `logs/evidence_failover.log` |
+| `prod_signed_tx_smoke.py` | **PASS** | `logs/evidence_signed_tx.log` (n2/n3 propagation) |
+| `prod_evm_smoke.py` (mempool, 3 RPC) | **PASS** | docker mesh Jul 12 evening + **re-PASS block #7** Jul 12 post-v1.2.29 |
+| `soak_monitor.ps1 -ProdMesh -Hours 7` | **PASS** | `logs/soak_report.json` (159 cycles, 0 fail) |
+| `soak_monitor.ps1 -ProdMesh -Hours 48` | **PASS** (2026-07-19 → 2026-07-21, v1.2.84) | `logs/soak_48h_v1.2.84_rerun3.log` + `logs/soak_report_48h.json` (`passed=true`, 0 FAIL; 11 transient ±1 height mesh WARNs accepted on rescore) |
+| Experimental 48h (`start_soak_prod_mesh_48h.ps1`) | **PASS** TCP+TLS (`0a7932c4`) · **PASS** libp2p (`3c801b87`) · **PASS** post-EVM-prep (`evm48pass1`) · **PASS** industrial polish tip (`ind48pass1`) · prior FAIL ×2 | TCP+TLS: [`0a7932c4`](evidence/runs/0a7932c4/). **libp2p #4:** [`3c801b87`](evidence/runs/3c801b87/). **Phase 3 post-EVM:** [`evm48pass1`](evidence/runs/evm48pass1/). **Phase 5 industrial tip:** [`ind48pass1`](evidence/runs/ind48pass1/) `passed=true`, `hard_fails=0`, `mesh_warn=0`, `warn_lines=0`, tip ~46099→~56972, window 2026-09-21→23, git `719deb4`. Prior FAIL: [`35104db0`](evidence/runs/35104db0/) · [`87f51b3e`](evidence/runs/87f51b3e/). Not Hybrid `375d14f`. Not public mainnet. Not EVM-only 48h. |
+| Libp2p STRICT 48h (`start_soak_prod_mesh_48h_strict.ps1`) | **PASS** 2026-09-23→25 | [`lp2pstrict1`](evidence/runs/lp2pstrict1/) — `passed=true` strict=true hard_fails=0 mesh_warn=0 warn_lines=0 fail_lines=0 mesh_ok=2800 tip ~57209→~68082 IntervalSec=60 FullHarnessEvery=6. Soft tip_skew OK-only. Not mempool sidecar / not default ind48pass1 / not mainnet. |
+| Long-Range STRICT 48h (`start_soak_long_range_lab.ps1 -Hours 48 -Strict`) | **PASS** 2026-09-26→28 | [`lrstrict1`](evidence/runs/lrstrict1/) — `passed=true` strict=true hard_fails=0 mesh_warn=0 warn_lines=0 fail_lines=0 ready_only=0 mesh_ok=2849 tip ~18646→~30096 IntervalSec=60 FullHarnessEvery=6. Distinct from default [`lr48pass1`](evidence/runs/lr48pass1/). Not BLS / not prod 778888 / not mainnet. |
+| EVM STRICT 48h (`start_soak_evm_mesh_48h_strict.ps1`) | **PASS** 2026-09-28→30 | [`evmstrict1`](evidence/runs/evmstrict1/) — `passed=true` strict=true hard_fails=0 mesh_warn=0 warn_lines=0 fail_lines=0 ready_only=0 mesh_ok=2801 tip ~85200→~96089 IntervalSec=60 FullHarnessEvery=6 TipStagnant=3600. Distinct from default [`evm48pass1`](evidence/runs/evm48pass1/). Not EVM-only / not geth / not EIP-4844 / not Long-Range / not BLS / not mainnet. |
+| Mempool+validation STRICT 48h (`start_mempool_validation_soak.ps1`) | **PASS** dual-report 2026-09-17→19 | [`mempool48pass1`](evidence/runs/mempool48pass1/) — soak `passed=true` hard_fails=0 mesh_warn=0 ready_only=0 warn_lines=31 soft tip ~35187→~44020 + sidecar `passed=true` admit_ok=303 refuse_ok=467 fail=0 store=rust demoted=False. Prior FAIL 2026-09-13→15 (35). Not mainnet / not Hybrid / not Long-Range. |
+| ADR 0021 global R&D audit (`verify_global_rd_audit.ps1`) | **PASS** 2026-09-13 FullLaunch+Rebuild **13/13** | [`adr0021gaudit1`](evidence/runs/adr0021gaudit1/) — ADR kernels/store, demote, mesh rebuild, probe, EVM smoke, load, prepare READY. **Not** 48h soak. |
+| Host verify restore (`verify_industrial_waves` + full `pytest tests/`) | **PASS** 2026-09-21 | Waves 542 needles OK; pytest **2734 passed / 11 skipped** after native-registry demote restore + honesty/needle drift. Covers MED wire-satoshi refuse + monitor HOL units already on `main`. Superseded for mesh claim by [`ind48pass1`](evidence/runs/ind48pass1/). |
+| AUDIT 90D Phase G money persist dual-write | **PASS** code+gate 2026-10-01 | Satoshi twins on SQLite/Rocks ABS ledger (stake/bridge/sprouts/NFT/burn/tx+receipts); `.\scripts\verify_audit_phase.ps1 -Phase G`. **Not** soak / **not** firm audit. |
+| Phase 5 host lab re-verify (oracle/shard/bridge OFF) | **PASS** 2026-10-01 | [`phase5reverify2`](evidence/runs/phase5reverify2/) — oracle 3/3 + shard 2/2 + bridge OFF 3/3; prod flags stay false. Prior [`phase5reverify1`](evidence/runs/phase5reverify1/). **Not** soak / **not** L1 cutover. |
+| AUDIT 90D Phase H engagement prep | **PASS** prep 2026-10-01 | `.\scripts\verify_audit_phase.ps1 -Phase H` — automated checklist green; **2 human firm items still pending** (honest). **Not** firm PASS. |
+| Phase 6 firm kickoff prep refresh | **PREP** 2026-10-01 | [`phase6prep1`](evidence/runs/phase6prep1/) — SHA `a978328` recorded; [`FIRM_KICKOFF_CHECKLIST.md`](FIRM_KICKOFF_CHECKLIST.md). **Not** firm PASS / **not** pen-test. |
+| Thin operator SDK v0 + NFT/AI labs | **Landed** lab 2026-10-01 | [`sdk/`](../sdk/) · [NFT_LAB_PROFILE](sprouts/NFT_LAB_PROFILE.md) · [AI_LAB_PROFILE](sprouts/AI_LAB_PROFILE.md). Prod sprout flags **false**. **Not** soak / **not** pin SDK. |
+| Mid-soak AI+NFT honesty close-out | **Closed** disk 2026-10-03 | Soft escrow + HTTP sprout gates (`_ai_sprout_enabled` / `_nft_sprout_enabled`) · `main` AI/NFT defaults False · labs `ai_lab`/`nft_lab` · units `test_exp_ai_nft_marketplace_wave` · git `6fb5640`…`18be475`. **Does not** claim live EVM STRICT 48h PASS (mesh still running separately). **Not** prod flag flip / **not** ERC-721 / **not** consensus. |
+| Showcase pack (funds / ПВТ / demo) | **Landed** docs 2026-10-03 | [SHOWCASE](SHOWCASE.md) · [FAQ](FAQ.md) · [ONE_PAGER](ONE_PAGER.md) / [ONE_PAGER_RU](ONE_PAGER_RU.md) · [ELEVATOR_PITCH](ELEVATOR_PITCH.md). Pin stub + `DEMO_RUNBOOK_PIN` on industrial tree. **Not** soak / **not** firm PASS / **not** TM registration. |
+| Dual-repo verify suite | **Landed** ops 2026-10-03 | [VERIFY_SUITE](VERIFY_SUITE.md) · `.\scripts\verify_dup_suite.ps1` (Quick→Max) · pin helper `verify_dup_both.ps1`. Smoke Quick PASS (gate+midsoak+labs). **Does not** start soak / **not** mainnet. |
+| Critical-path audit scan | **Landed** code 2026-10-01 | [AUDIT_FULL_SCAN_2026-10-01](AUDIT_FULL_SCAN_2026-10-01.md) · `python scripts/audit_critical_paths.py`. Fail-closed money default + NFT auction satoshi + prod CORS. **Not** soak / **not** mesh L1 claim. |
+| Diligence re-scan (fund prep) | **Landed** 2026-10-03 | [AUDIT_FULL_SCAN_2026-10-03](AUDIT_FULL_SCAN_2026-10-03.md) · tip `9944c55` gates+mesh+90d A–H PASS; `pre_mainnet_audit` checklist honesty. **Not** firm PASS / **not** new soak. |
+| Prod mesh probe after restore tip (`probe_prod_mesh -Quick`) | **PASS** 2026-09-21 | tip ~44442 aligned; pre-soak then **48h PASS** [`ind48pass1`](evidence/runs/ind48pass1/). |
+| Industrial polish tip 48h (`start_soak_prod_mesh_48h.ps1` on `719deb4`) | **PASS** 2026-09-21→23 | [`ind48pass1`](evidence/runs/ind48pass1/) — ADR 0021 wire path on live mesh; `hard_fails=0` `mesh_warn=0` tip ~46099→~56972 |
+| libp2p mesh-fix 2h smoke (`health_watch.ps1 -DurationMin 120`) | **PASS** (2026-08-28) | [`mesh-fix-smoke-2h`](evidence/runs/mesh-fix-smoke-2h/) + [`mesh-fix-smoke-2h-pre48h3`](evidence/runs/mesh-fix-smoke-2h-pre48h3/) — both `passed=true`, `hard_fails=0`, `mesh_warn=0`. Pre-flight before libp2p 48h #4. |
+
+### Experimental soak / smoke index (operator)
+
+| Run | Transport | Result | Next |
+|-----|-----------|--------|------|
+| [`0a7932c4`](evidence/runs/0a7932c4/) | TCP+TLS | **48h PASS** | Do not relabel as libp2p |
+| [`35104db0`](evidence/runs/35104db0/) | libp2p #1 | **FAIL** (`health_watch_exit=1`, ready 503) | Historical |
+| [`87f51b3e`](evidence/runs/87f51b3e/) | libp2p #2 | **FAIL** (`hard_fails=0`, `mesh_warn=46`) | Historical |
+| [`mesh-fix-smoke-2h`](evidence/runs/mesh-fix-smoke-2h/) | libp2p | **2h PASS** | Superseded by pre48h3 |
+| [`mesh-fix-smoke-2h-pre48h3`](evidence/runs/mesh-fix-smoke-2h-pre48h3/) | libp2p | **2h PASS** (2026-08-28) | Pre-flight before 48h #4 |
+| [`3c801b87`](evidence/runs/3c801b87/) | libp2p #4 | **48h PASS** (`passed=true`, `hard_fails=0`, `mesh_warn=0`) | B1 closed — not Long-Range / not mainnet |
+| [`lr2h9f3a`](evidence/runs/lr2h9f3a/) | Long-Range lab solo 2h | **2h PASS** (`passed=true`, `hard_fails=0`, ok_lines=121) | Lab-only digest WS; height=0 solo; **not** BLS / not prod 778888 / not mesh-industrial / not mainnet |
+| [`lr2hmesh`](evidence/runs/lr2hmesh/) | Long-Range lab 3-node mesh 2h | **2h PASS** (`passed=true`, `hard_fails=0`, mesh_ok=115) | Tip growth + peers=2 + Ed25519 committee; **not** BLS / not prod 778888 / not mainnet; lab 48h separate |
+| [`lr48fail1`](evidence/runs/lr48fail1/) | Long-Range lab 3-node mesh 48h | **48h FAIL** (`passed=false`, `hard_fails=0`, mesh_warn=28 non-transient, tip h4→~6782) | Historical; superseded by `lr48pass1` |
+| [`lr2hintensify`](evidence/runs/lr2hintensify/) | Long-Range lab intensify 2h | **2h PASS** (`passed=true`, `hard_fails=0`, `mesh_warn=0`, tip ~6828→~7765) | Preflight before `lr48pass1`. **Not BLS / not mainnet** |
+| [`lr48pass1`](evidence/runs/lr48pass1/) | Long-Range lab 3-node mesh 48h | **48h PASS** (`passed=true`, `hard_fails=0`, `mesh_warn=0`, ready_only=13 tolerated, tip ~7929→~14770) | B2 closed — **not** BLS / not prod 778888 / not mainnet / not Hybrid |
+| [`lrstrict1`](evidence/runs/lrstrict1/) | Long-Range lab STRICT 48h | **48h PASS** (`passed=true`, `strict=true`, `hard_fails=0`, `mesh_warn=0`, `warn_lines=0`, tip ~18646→~30096, mesh_ok=2849) | STRICT bar — distinct from default `lr48pass1` — **not** BLS / not prod / not mainnet |
+| [`evm48pass1`](evidence/runs/evm48pass1/) | Experimental prod mesh 48h (post-EVM prep) | **48h PASS** (`passed=true`, `hard_fails=0`, `mesh_warn=0`, `ready_only=0`, `warn_lines=8` soft, tip ~10125→~19197) | Phase 3 closed — **not** EVM-only 48h / not Long-Range / not BLS / not mainnet |
+| [`evmstrict1`](evidence/runs/evmstrict1/) | EVM STRICT 48h (post-EVM prep mesh) | **48h PASS** (`passed=true`, `strict=true`, `hard_fails=0`, `mesh_warn=0`, `warn_lines=0`, tip ~85200→~96089, mesh_ok=2801) | STRICT bar — distinct from default `evm48pass1` — **not** EVM-only / not geth / not EIP-4844 / not mainnet |
+| [`mempool48pass1`](evidence/runs/mempool48pass1/) | Mempool+validation STRICT dual-report 48h | **48h PASS** (`passed=true`, `hard_fails=0`, `mesh_warn=0`, `ready_only=0`, `warn_lines=31` soft, tip ~35187→~44020; sidecar admit/refuse fail=0) | Mempool Rust store + validation path — **not** mainnet / not Hybrid / not Long-Range / not BLS |
+| [`ind48pass1`](evidence/runs/ind48pass1/) | Experimental prod mesh 48h (industrial polish / ADR 0021 wire) | **48h PASS** (`passed=true`, `hard_fails=0`, `mesh_warn=0`, `warn_lines=0`, tip ~46099→~56972, git `719deb4`) | Phase 5 tip re-soak — **not** STRICT sidecar / not EVM-only / not Long-Range / not BLS / not mainnet |
+| [`lp2pstrict1`](evidence/runs/lp2pstrict1/) | Libp2p STRICT 48h (mempool-parity interval/bar) | **48h PASS** (`passed=true`, `strict=true`, `hard_fails=0`, `mesh_warn=0`, `warn_lines=0`, tip ~57209→~68082, mesh_ok=2800) | Soft tip_skew OK-only — **not** mempool sidecar / not default ind48pass1 / not EVM-only / not Long-Range / not BLS / not mainnet |
+
+### Lab evidence (not soak)
+
+| Claim | Status | Artifact |
+|-------|--------|----------|
+| ADR 0017 Long-Range lab | **Lab mesh 2h PASS** [`lr2hmesh`](evidence/runs/lr2hmesh/); **lab 48h PASS** [`lr48pass1`](evidence/runs/lr48pass1/); **STRICT 48h PASS** [`lrstrict1`](evidence/runs/lrstrict1/) (`hard_fails=0`, `mesh_warn=0`, tip ~18646→~30096); prior FAIL [`lr48fail1`](evidence/runs/lr48fail1/); intensify [`lr2hintensify`](evidence/runs/lr2hintensify/) | 3-node compose + committee + outbound WS gossip + autonomous roll-forward. Prod mesh keeps `feature_long_range=false`. **not BLS / not prod arm / not mainnet Long-Range proof.** |
+| EVM depth lab (Profile A) | **Unit + lab + Phase 3 mesh 48h** + **STRICT 48h PASS** [`evmstrict1`](evidence/runs/evmstrict1/) | waves 8–11 + RPC labs + `evm_pre_48h_harness.py` + prepare wiring. Mesh soak [`evm48pass1`](evidence/runs/evm48pass1/). STRICT [`evmstrict1`](evidence/runs/evmstrict1/) tip ~85200→~96089. Prod `mem_limit` 2048m. **not full geth / not EIP-4844 / not EVM-only 48h / not WS eth_subscribe.** |
+| Oracle / cross-shard lab | **Unit + lab proven** (aux / Profile E) | wave-2: quorum median + reporter dedupe (`oracle_lab`); 2/3 validator quorum (`cross_shard_lab`). Prod flags off. **Not prod 778888 sprout enable.** |
+| Gruver87 council (ADR 0022) | **Lab + live staging compose PASS** (not mainnet / not on-chain gov) | Manifest `gruver87-council-manifest.json` (sha prefix `4487b29a…`); labs `guarantor_council_lab.py`, `guarantor_council_staging_mint_lab.py` PASS; live Profile C `:19080` / `778889` genesis mint **87/87** ([`council-staging-genesis-20260828`](evidence/runs/council-staging-genesis-20260828/)). **Not signed on-chain gov / not 48h soak / not L1 security guarantee.** |
+| `bridge_decision_off` | **PASS** (2026-07-21) | Bridge stays OFF until audited L1 contracts — see [BRIDGE_L1_MAINNET](BRIDGE_L1_MAINNET.md) |
+| `testnet_readiness.ps1 -MinSoakHours 48` | **PASS** | After 48h soak report |
+
+Full JSON template: [docs/evidence_run.example.json](evidence_run.example.json) (live runs: `data/evidence_run.json`, gitignored)
+
+### Known limitations (auditor stamp)
+
+| Topic | Honest status |
+|-------|----------------|
+| Tip `state_root` | **Wave C tip+apply** — ceremony-armed v2 tip leaves use integer `b_satoshi` (`SATOSHI_MULTIPLIER=1e6`); apply/fees/gas/reward satoshi-int; float only at display/wire edges. Local prod mesh JSON + `ABS_STATE_ROOT_*` env armed. **tip-v2 48h soak PASS** Aug 5–7 (`docs/evidence/runs/375d14f/`). Not a public mainnet cutover claim. |
+| Mesh `/health/ready` | **Wave C/D + tip-v2 soak** — soft wire_probe flaps no longer 503 when deep_ready holds (`375d14f`); tip-v2 48h soak ready_only_fail=0. Soft-refuse bake still applies (`3288700f4fc7`). |
+| External audit | **Not completed** — tracker rejects template notes; requires real evidence URL |
+| Public VPS / DNS | Not claimed |
+| Bridge L1 | **OFF by recorded decision** — see [Bridge OFF audit checklist](#bridge-off--pre-enable-audit-checklist) |
+| RocksDB column families | **Armed in prod JSON** (`rocksdb_column_families=true`, dual-read legacy `default`) — live mesh still on last bake until soak-day rebuild; not a 48h soak claim |
+| Ceremony pin | Automation exists; production hash/manifest still operator-owned |
+| P2P TLS | Historical TCP+TLS soak used mTLS. **ADR 0020 Experimental mesh uses Noise** (libp2p); mTLS overlay is not the default on this tree. Hybrid pin stays TCP+TLS. |
+| JWT admin | `role=admin` enforced on protected POSTs; mint via `scripts/mint_admin_jwt.py` |
+| Tip-safety domain (`consensus/tip_safety`) | **Unit-proven** (stage 1) — see [ADR 0001](adr/0001-tip-safety.md) |
+| Tip-safety shadow (`TIP_SAFETY_SHADOW`) | **Wired observe-only** (stage 2) — metrics `abs_tip_safety_shadow_*` |
+| Tip-safety enforce (`TIP_SAFETY_ENFORCE`) | **Wired on import path** (stage 3) — refuse on policy reject; **required in prod** via `prod_gate` / `Config.validate()`; lab-proven via unit tests, not yet 48h soak-as-enforce |
+| Tip proof / Long-Range / BFT quorum | **Partial** — bounded `AncestryWindow` (stage-1.5, ADR 0016) allows rollback to recorded ancestors; **not** Long-Range / BFT quorum |
+| P2P transport boundary (`network/transport`, ADR 0002 A–C) | **Wired** on Python ingress admit + egress prepare (`NativeTransportAdapter`); metrics `abs_p2p_transport_*` |
+| P2P application dispatcher (`network/p2p_dispatch`, ADR 0002 D) | **Wired** — `HandlerRegistry` + `P2PDispatcher` routes application types; tip-evidence DI via `TipSafetyEvidenceBridge`; shape gates remain on node; **not** native shell ownership; not libp2p / tip proof |
+| Sync consistency (`sync/consistency`, ADR 0003 A–D) | **Wired** — fail-closed ConsistencyService + machine; incomplete-ahead is BehindOpen (not green); `SyncSolicitHub` + `SyncSolicitPort` own waiters (arm/fulfill/timeout/expire_stale); `_handle_message` only forwards; AbsoluteNode.import_block tip-safety-aware; **not** Long-Range / snap-sync / tip proof |
+| Path A catch-up loop (`sync/catchup/path_a`, ADR 0004 A) | **Unit-proven** — `CatchUpPathAService.run_ahead` over CatchUp* ports; 29 unit tests; **not** tip proof / libp2p |
+| Path A live thin wire (`network/catchup_adapters`, ADR 0004 B) | **Integration-wired** — `_sync_with_peer` ahead branch replaced by `CatchUpPathAService.run_ahead` via P2P port adapters; 9 integration tests (simulated peer, no live TCP); **not** tip proof / libp2p / snap-sync |
+| Path A shared fast_sync (`sync/catchup/engine_io`, ADR 0004 C) | **Wired** — `SyncEngine.fast_sync` delegates ahead import to `CatchUpPathAService` via `SyncEngineCatchUpIO`; private `to_import` loop removed; incremental + Step C tests; **not** tip proof / libp2p |
+| Same-height fork reconcile (`sync/fork`, ADR 0005 A) | **Unit-proven + thin-wired + fail-closed** — `ForkReconcileService`; malicious same-height → `ForkReconcileMaliciousError` + `ForkSecurityEvidence` on `security.fork_refuse` bus + peer strike; spam escalate; **not** tip proof / Long-Range / mesh soak |
+| Storage ports + fake UoW (`storage/ports`, ADR 0006 A–C) | **Unit-proven** — domain Block/State/Meta/UoW/Health ports + `FakeStorage` atomicity / disk_full / corruption / CAS; `RocksDBStorageAdapter` present; **not** live Rocks soak / aux.db evacuated |
+| Storage canonical cutover (`Blockchain` + `open_storage`, ADR 0006 D–E) | **Integration-wired** — `add_block` persist via StoragePort UoW (join open atomic); factory + main DI; cutover tests (CAS/ENOSPC/import/tip agree); **not** live disk-fill |
+| Storage domain purge (`blockchain.py` → `self.storage`, ADR 0006 F) | **Integration-wired** — domain logic uses StoragePort only; compat `@property db`→unwrap for API/P2P; native snapshot/writeback via port; **not** aux.db evacuated / API `.db` removed |
+| Consensus ports + round SM (`consensus/ports`, `consensus/bft`, ADR 0007 A–C) | **Unit-proven + adapter-wired** — `ConsensusPort` / `ValidatorRegistryPort`; fail-closed `RoundStateMachine` (Propose→Finalize/Locked) + Evidence/lockdown; façade keeps `attest`/`get_stats`; **`finality_quorum_live` remains False**; **not** mesh BFT quorum / tip proof / slash gossip |
+
+**Industrial fixes applied (Jul 12 evening):** mesh mining gate no longer latches on stale P2P wire roots; hub uses live STATUS heights; P2P broadcast non-blocking; `add_block` runs in worker thread so EVM apply cannot freeze the event loop; parallel peer state-root RPC.
+
+**Lesson:** never use `/contract/deploy` direct on prod mesh for cross-node evidence — mempool signed deploy only. If split-brain occurs, rebuild without `-KeepVolumes`.
+
+---
+
+## Proven in live runs (Jul 2026)
+
+| Claim | Evidence | How to reproduce |
+|-------|----------|------------------|
+| Prod 3-node mesh boots on RocksDB | `docker_prod_3node.ps1` → healthy containers, unified heights | `.\scripts\docker_prod_3node.ps1 -SkipBuild -KeepVolumes` |
+| **Public testnet seed (77777)** | Docker seed on :19080, live gate PASS | `.\scripts\testnet_evidence_suite.ps1` |
+| Cross-node state / tip alignment | `GET /chain/consistency/harness` OK on :18180–:18182 | `.\scripts\probe_prod_mesh.ps1` |
+| **Prod mesh probe (post v1.2.77)** | Jul 13 — 3/3 reachable, height 182 aligned, harness OK | `logs/prod_mesh_probe.json` |
+| P2P topology on prod ports | `peer_count=2`, `topology_healthy=True` in post-checks | `verify_prod_mesh_probe.py` |
+| **Failover / resilience** | node2 stop → mesh alive → node2 rejoin, heights aligned | `.\scripts\prod_mesh_resilience_suite.ps1` |
+| **Signed tx propagation (prod)** | `prod_signed_tx_smoke.py` → n2/n3 see tx | `python scripts/prod_signed_tx_smoke.py` |
+| **7h industrial soak** | `soak_report.json` passed, 159 cycles, 0 fail | `.\scripts\soak_monitor.ps1 -ProdMesh -Hours 7` |
+| RocksDB DR path | DR rehearsal script + backup | `.\scripts\dr_restore_rehearsal.ps1 -DockerMesh1` |
+| **Wave D image bake + ready** | **PASS** 2026-08-01 — soft-refuse attestation/rate/`tip_unknown_parent`; sticky consistency during wire re-probe; priority send bypass; canonical bootstrap; `ready-check` ×3 + probe Quick on baked image | `docs/evidence/runs/3288700f4fc7/` |
+| **Wave D short soak (2h)** | 2026-08-01 — mesh height-aligned (`mesh_warn=0`); soak_report `passed=false` (8 ready hard-fails; not 48h) | `docs/evidence/runs/3288700f4fc7/soak_report.json` |
+| **Wave C tip+apply satoshi** | **PASS** 2026-08-02 — fresh mesh wipe then tip-v2 arm; `b_satoshi` active on :18180–:18182; matching tip roots; `state_consistent=true`; `ready-check` ×3 + probe Quick PASS; apply path unit-proven satoshi. Durability: tip-v2 **48h PASS** Aug 5–7 (`375d14f`). Not public mainnet. | `docs/evidence/runs/79472a111cd5/` + `docs/STATE_ROOT_ENCODING_MIGRATION.md` + `docs/evidence/runs/375d14f/` |
+| **Industrial tip-v2 re-smoke** | **PASS** short proofs 2026-08-02; prior **48h FAIL** Aug 2–4 (ready flaps); **48h PASS** Aug 5–7 (`passed=true`, fail=0, mesh_warn=0, hard_fail=0) | `docs/evidence/runs/8c92a51f0144/` (kickoff) + `docs/evidence/runs/375d14f/` + `logs/soak_report_tipv2_48h_rerun.json` + [INDUSTRIAL_HARDEN_RUNBOOK.md](INDUSTRIAL_HARDEN_RUNBOOK.md) |
+| **Phase 3 ops cutover dry-run** | **PASS** 2026-08-07 — bridge OFF gate; ceremony suite; pin MATCH; secrets dry-run (no `-Force`); DR DockerMesh1 tip=4643 | `docs/evidence/runs/phase3-da25c34/` |
+| **Phase 4 audit binder** | **READY** 2026-08-07 — industrial_gate 48h PASS; audit pack zip; tracker 6/8; firm engagement pending | `docs/evidence/runs/phase4-691329c/` + `logs/audit_pack_20260807.zip` |
+| Short health monitoring | `health_watch` 1–2 min cycles, harness quick/full | `.\scripts\health_watch.ps1 -ProdMesh -DurationMin 2` |
+| CI / static industrial gates | `industrial_gate.py`, prod_gate, pytest | GitHub Actions + local gate scripts |
+| Native crypto required in prod profile | `ABS_REQUIRE_NATIVE_CRYPTO`, prod_gate | prod mesh configs |
+| **EVM deploy + storage on all prod RPC peers** | Mempool deploy mined in block; `eth_getStorageAt` slot0=1 on all 3 RPC | `docker exec … prod_evm_smoke.py` (see evidence run) |
+
+---
+
+## Proven (local / CI evidence)
+
+| Item | Evidence |
+|------|----------|
+| **48h soak (float tip)** | **PASS** 2026-07-19→21 — `logs/soak_48h_v1.2.84_rerun3.log`, `soak_report_48h.json` |
+| **48h soak (tip-v2)** | **PASS** 2026-08-05→07 — `logs/industrial_tipv2_soak_48h_rerun.log`, `soak_report_tipv2_48h_rerun.json` (`passed=true`, 0 FAIL, 0 mesh_warn); package `docs/evidence/runs/375d14f/` |
+| **Public testnet seed (local Docker)** | **PASS** Jul 12 — chain 77777 on :19080, `public_testnet_gate --live` |
+| Failover / signed tx / EVM mempool | Jul 12 evidence logs (see table above) |
+
+## Not yet proven (automation may exist)
+
+| Gap | Why it is **not** proven yet | What would prove it |
+|-----|------------------------------|---------------------|
+| **External audit** | README and `external_audit_tracker.py` checklist incomplete | Third-party audit report + tracker items closed |
+| **Bridge mainnet cutover** | Prod mesh runs with `bridge_enabled: false` by design | Audited L1 contracts + relayer SLOs per `docs/BRIDGE_L1_MAINNET.md`; decision recorded via `bridge_decision_off` step |
+| **Ceremony + secret rotation (operator cutover)** | Scripts proven; production hash/manifest pin is operator-owned | Operator runs pin + `-Force` rotation before cutover — see `docs/MAINNET_CUTOVER.md` |
+| **Public testnet / VPS + DNS** | Local seed proven; no public URL/TLS yet | VPS + `vps_testnet_bootstrap.sh` + nginx TLS |
+
+---
+
+## Bridge OFF — pre-enable audit checklist
+
+Bridge remains **disabled** on prod mesh until audited L1 contracts ship. Use this checklist before any `bridge_enabled=true` cutover.
+
+| # | Control | Expected | Verify |
+|---|---------|----------|--------|
+| 1 | Prod mesh config | `bridge_enabled: false` | `scripts/prod_gate.py`, `node.prod.*.json` |
+| 2 | Docker compose prod | `BRIDGE_ENABLED=false` | `docker-compose.prod.3node.yml` |
+| 3 | K8s configmap | `BRIDGE_ENABLED: "false"` | `deploy/k8s/configmap.yaml` |
+| 4 | API honesty | `/status` → `bridge_relayer_live=false` when off | `tests/unit/test_status_honesty.py` |
+| 5 | L1 RPC keys | Not dev placeholders in prod secrets | `external_audit_tracker`, env at deploy |
+| 6 | Rust bridge path | Present but idle; no live lock/mint | `GET /bridge/health`, `BRIDGE_L1_MAINNET.md` |
+| 7 | Oracle secret | Not required while bridge off | prod mesh without `BRIDGE_ORACLE_SECRET` OK |
+| 8 | Queue file | Path configured; no unaudited L1 writes | `bridge_l1_queue.json` audit log only |
+| 9 | CI isolation | Bridge tests only in `ci-bridge*` modes | `verify_p2p_ci.py --mode ci-bridge` |
+| 10 | Decision record | `bridge_decision_off` step PASS | `scripts/bridge_off_audit_gate.py`, `testnet_readiness.ps1` |
+
+**Not satisfied until:** third-party smart-contract audit + operator sign-off per [BRIDGE_L1_MAINNET.md](BRIDGE_L1_MAINNET.md).
+
+---
+
+## Interpreting common log lines
+
+| Log | Meaning |
+|-----|---------|
+| `OK: tx propagation` on prod-mesh3-live (signed via `PROD_SMOKE_WALLET_PATH` / mesh `validator-1.wallet.json`) | Prod `auto_sign` is off; live gate must sign. Missing wallet is FAIL, not `VERIFY_P2P_ALLOW_SKIP` |
+| `SKIP: multi-node proof (testnet endpoints blocked in prod)` | Prod profile blocks `/testnet/*` drills — expected skip (not a failure); signed tx smoke is the prod proof |
+| `OK: soak passed` in &lt;1 second | **Bug / false positive** (fixed v1.2.21) — soak must run for `Hours × 3600` seconds |
+| Heights stuck, mempool not clearing | Mining gate blocked by lagging peer heights — run `mesh_recover.ps1 -HealFork` (not restart-only) |
+| `heights=N / N-1 / N-1`, node1 diverged HINT | Hub solo-fork — `.\scripts\mesh_heal_fork.ps1 -Force` then rebuild evidence |
+| `[P2P] rate limit exceeded for docker-prod-mesh-1 (500/s)` | **Fixed v1.2.77** — sync gossip types now exempt; rebuild mesh. Before fix: dropped blocks during catch-up |
+| `External audit: not completed` | Honest organizational gate — see `scripts/external_audit_tracker.ps1` |
+
+---
+
+## Recommended proof sequence (before “mainnet-ready” language)
+
+1. `.\scripts\docker_prod_3node.ps1 -SkipBuild -KeepVolumes`
+2. `.\scripts\prod_mesh_failover.ps1` — record block heights during node2 outage
+3. `python scripts/prod_signed_tx_smoke.py`
+4. `python scripts/evm_pre_48h_harness.py` — labs + gate + probe + `prod_evm_smoke` (no soak start)
+5. `python scripts/prod_evm_smoke.py` — deploy + `eth_getStorageAt` on all prod RPC ports (standalone)
+6. `.\scripts\prod_evidence_suite.ps1` — health + failover + signed tx + EVM (optional one-shot)
+7. `.\scripts\soak_monitor.ps1 -ProdMesh -Hours 48 -IntervalSec 300` — **only on explicit operator command**
+8. `.\scripts\testnet_readiness.ps1 -ProdMesh -MinSoakHours 48`
+9. External audit tracker → third-party review
+10. `python scripts/bridge_off_audit_gate.py` — Bridge OFF checklist (10 controls)
+11. `python scripts/stamp_release_evidence.py --git-tag v1.2.96` — evidence stamp (optional soak ref)
+
+---
+
+## Related docs
+
+- [MAINNET_CUTOVER.md](MAINNET_CUTOVER.md)
+- [MAINNET_GAP_ANALYSIS.md](MAINNET_GAP_ANALYSIS.md)
+- [PUBLIC_TESTNET.md](PUBLIC_TESTNET.md)
+- [STORAGE_ROCKSDB.md](STORAGE_ROCKSDB.md)
+- [INCIDENT_RESPONSE.md](INCIDENT_RESPONSE.md)

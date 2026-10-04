@@ -1,0 +1,62 @@
+name: Publish Wheel on Release
+
+on:
+  release:
+    types: [created]
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+
+      - name: Set up Rust
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install native build deps (RocksDB/bindgen)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang libclang-dev cmake pkg-config \
+            libsnappy-dev zlib1g-dev libbz2-dev liblz4-dev libzstd-dev
+
+      - name: Build wheel
+        run: |
+          python -m pip install --upgrade pip maturin
+          cd native/abs_native
+          if [ "${{ github.repository }}" = "Gruver87/dup-protocol-experimental" ]; then
+            python -m maturin build --release --features "pyo3/extension-module,libp2p" --out target/wheels
+          else
+            python -m maturin build --release --out target/wheels
+          fi
+
+      - name: Publish to PyPI
+        if: github.repository == 'Gruver87/dup-protocol'
+        env:
+          TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
+          TWINE_USERNAME: __token__
+        run: |
+          if [ -z "$TWINE_PASSWORD" ]; then
+            echo "Skip PyPI upload (PYPI_API_TOKEN not configured)"
+            exit 0
+          fi
+          python -m pip install --upgrade pip twine
+          python -m twine upload native/abs_native/target/wheels/*.whl -u "$TWINE_USERNAME" -p "$TWINE_PASSWORD"
+
+      - name: Upload wheel artifact to release
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          files: native/abs_native/target/wheels/*.whl
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

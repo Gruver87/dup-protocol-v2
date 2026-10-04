@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "description": "Public validator set — ceremony-derived addresses (chain_id 778888) and optional secp256k1 public keys only (no private keys). Replace with operator-controlled keys before public cutover.",
+  "validators": [
+    {
+      "index": 1,
+      "node_id": "prod-validator-1",
+      "address": "0x852f81937a50ef515fce9d41bb16fe60aa709d0a",
+      "public_key": "",
+      "mines": true,
+      "stake": 5000,
+      "shard_id": 0
+    },
+    {
+      "index": 2,
+      "node_id": "prod-validator-2",
+      "address": "0x0ca999532b54c9658e59280b96097b03d5232c6b",
+      "public_key": "",
+      "mines": true,
+      "stake": 3000,
+      "shard_id": 0
+    },
+    {
+      "index": 3,
+      "node_id": "prod-validator-3",
+      "address": "0x9fc4228bf119339bfdc270cc800e1dce55806308",
+      "public_key": "",
+      "mines": false,
+      "stake": 2000,
+      "shard_id": 1
+    }
+  ]
+}

@@ -1,0 +1,8 @@
+﻿# Absolute Blockchain Node — dependencies (aggregator).
+# Runtime (prod image): requirements-runtime.txt (+ requirements-runtime.lock)
+# Dev/CI tests:       requirements-dev.txt
+#
+# Prefer: pip install -r requirements-dev.txt
+# Prod Docker:        pip install --require-hashes -r requirements-runtime.lock
+
+-r requirements-dev.txt

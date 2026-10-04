@@ -1,0 +1,105 @@
+﻿# DUP Protocol v2 polygon — never commit secrets / runtime / agent junk
+.cursor/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+
+# Data (исключаем БД и локальные кошельки)
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+data/
+data/wallet.json
+wallet.json
+logs/
+.hypothesis/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Backup
+backup_*/
+backups/
+*.zip
+*.backup
+*.old
+*.broken
+*.bak
+node_debug.log
+test_hardened_system/
+pytest-cache-files*/
+
+# Secrets
+.env
+.env.local
+.env.production
+.env.testnet
+.env.bak.*
+*.pem
+*.key
+*oracle_keys*
+*secrets*.txt
+*secrets*.json
+*_backup_keys*
+COMMANDS_v57*.txt
+Absolute_Blockchain_All_Commands.txt
+start_all_services.bat
+!wallet.example.json
+
+# Coverage
+.coverage
+htmlcov/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+# Local scratch / audit exports
+tree.txt
+audit_export.txt
+data/mega_audit_report.json
+
+# Local agent / mesh dump junk (never commit)
+.wave_c_*.txt
+.cursor_mesh_verify*.txt
+scripts/_emergency_*.ps1
+scripts/_mesh_verify*.ps1
+scripts/_rl_stress.py
+.cursor/
+
+# Rust bridge build artifacts
+bridge/abs_bridge_bin
+bridge/abs_bridge_bin.exe
+bridge/rust_bridge/target/
+native/abs_native/target/
+
+# Built wheels / local dist (never commit binary artifacts)
+dist/
+*.whl
+
+# Local pytest scratch dumps
+pytest_out.txt
+pytest_exit.txt
+
+# Old files
+Новый.py
+ABSOLUTE_FINAL_FIXED_backup.py
+absolute-blockchain-ultimate/
+_archive/
+
+# Локальный архив старых версий — на рабочем столе:
+# Desktop/Начало блокчейна/  (не в git)

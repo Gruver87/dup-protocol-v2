@@ -1,0 +1,829 @@
+# =============================================================================
+# DUP PROTOCOL / DUP LABS — ПОЛНЫЙ СПРАВОЧНИК КОМАНД (репозиторий, БЕЗ секретов)
+# =============================================================================
+# Автор:     Uladzimir Dabranski (Gruver87) · D.U.P.
+# Обновлено: 2026-10-01
+# Brand:     DUP Labs (org) · DUP Protocol (product)
+# Formerly:  Absolute Blockchain (локальные папки Desktop могут ещё называться Absolute_*)
+#
+# ДВА РЕПОЗИТОРИЯ (не путать):
+#   PIN (industrial) — audit-freeze, TCP+TLS mesh, tag v1.3.1339-tip-v2-industrial
+#             C:\Users\vovun\Desktop\Absolute_Blockchain_Ultimate_Hybrid
+#             https://github.com/Gruver87/dup-protocol  (branch master)
+#
+#   EXPERIMENTAL — R&D sandbox: libp2p, Long-Range lab, council NFT, EVM depth, SDK, AI sprouts
+#             C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+#             https://github.com/Gruver87/dup-protocol-experimental  (branch main)
+#
+# Репозиторная копия БЕЗ секретов: docs/ALL_COMMANDS.txt (в каждом репо)
+# Краткая шпаргалка:               docs/COMMANDS_REFERENCE.md
+#
+# Личная Desktop-копия: Absolute_Blockchain_All_Commands_FIXED.txt (не в git).
+# Секреты: только .env · secrets/README.md — Part 24 = ИМЕНА переменных only.
+# =============================================================================
+#
+# ЧЕСТНОСТЬ (всегда):
+#   · Gate green ≠ public mainnet
+#   · Prod mesh 778888 = industrial PROFILE, не публичный mainnet
+#   · Bridge на live mesh: OFF (ADR 0010 cutover отдельно)
+#   · Phases 1–5 CLOSED (libp2p/LR/EVM/mempool STRICT packs на диске) — см. EVIDENCE_MATRIX
+#   · Phase 6 = org firm kickoff (prep on disk: phase6prep1) — NOT firm PASS
+#   · Thin SDK v0.1.1 / AI sprouts = lab DX — NOT consensus / NOT pin SDK
+#   · External audit / pen-test — 2 human tracker items still pending
+#   · Council NFT (87) — lab/staging 778889, НЕ security guarantee L1
+#   · 48h soak claim ONLY with pack + hard_fails=0 (do not invent)
+#
+# PowerShell: только .\scripts\...  (не «pytest» без cd в репо)
+# Команды вводить БЕЗ хвостов из отчётов (→ OK, → 99 passed).
+#
+# =============================================================================
+
+# =============================================================================
+# ОГЛАВЛЕНИЕ
+# =============================================================================
+#   Шпаргалка портов / chain_id ....... ниже
+#   Карта ярлыков .................... легенда
+#   ЧАСТЬ  0   Быстрый старт
+#   ЧАСТЬ  1   Первичная настройка
+#   ЧАСТЬ  2   Одна нода
+#   ЧАСТЬ  3–6 Devnet docker (2/3/5 node)
+#   ЧАСТЬ  7   P2P sync / verify
+#   ЧАСТЬ  8   REST API L1
+#   ЧАСТЬ  9   Bridge (OFF на prod mesh)
+#   ЧАСТЬ 10   Кошелёк / TX
+#   ЧАСТЬ 11   JSON-RPC
+#   ЧАСТЬ 12   EVM / sprouts (NFT off на 778888)
+#   ЧАСТЬ 13   Explorer
+#   ЧАСТЬ 14   Telegram
+#   ЧАСТЬ  15   Prod mesh Docker [778888]
+#   ЧАСТЬ  16   Тесты · industrial gate
+#   ЧАСТЬ  17   Soak / evidence
+#   ЧАСТЬ  18   RocksDB / DR
+#   ЧАСТЬ  19   P2P TLS (Hybrid) / libp2p (Experimental)
+#   ЧАСТЬ  20   Ceremony / validators
+#   ЧАСТЬ  21   Public testnet
+#   ЧАСТЬ  22   Observability / K8s
+#   ЧАСТЬ  23   Диагностика
+#   ЧАСТЬ  24   Секреты — шаблон (значения в .env)
+#   ЧАСТЬ  25   Git / пути
+#   ЧАСТЬ  26   Сценарии дня
+#   ЧАСТЬ  27   Устаревшее
+#   ЧАСТЬ  28   ADR / profiles (0016 sprouts)
+#   ЧАСТЬ  29   Hybrid vs Experimental — когда какой репо
+#   ЧАСТЬ  30   L1 Integration Gate (обязательный порядок)
+#   ЧАСТЬ  31   Experimental R&D (libp2p, LR, EVM labs)
+#   ЧАСТЬ  32   Gruver87 Council NFT (ADR 0022, chain 778889)
+#   ЧАСТЬ  33   AUDIT 90D A–H (money honesty + engagement prep)
+#   ЧАСТЬ  34   Phase 6 firm kickoff (org) — NOT firm PASS
+#   ЧАСТЬ  35   Thin operator SDK v0.1 (dup_sdk)
+#   ЧАСТЬ  36   AI / MEV sprouts lab (flags OFF on prod)
+#   ЧАСТЬ  37   NFT marketplace lab (feature_nft OFF on prod)
+# =============================================================================
+
+
+# =============================================================================
+# ШПАРГАЛКА — ПОРТЫ · CHAIN_ID
+# =============================================================================
+#
+# | Что                         | URL / порт              | Repo / profile        |
+# |-----------------------------|-------------------------|------------------------|
+# | Solo REST                   | http://localhost:8080   | dev                    |
+# | Node2 / Node3               | :8081 / :8082           | devnet docker          |
+# | JSON-RPC dev                | :8545                     | MetaMask dev           |
+# | Prod mesh HTTP              | :18180 / :18181 / :18182| docker_prod_3node      |
+# | Prod mesh RPC               | :18546–:18548           | prod profile           |
+# | Staging APP (NFT council)   | http://127.0.0.1:19080  | Experimental only      |
+# | Staging APP RPC             | :19545                    | chain_id 778889        |
+# | Staging APP P2P             | :19000                    | feature_nft=true       |
+# | Long-Range lab compose      | (см. LONG_RANGE_LAB)    | отдельный compose      |
+# | P2P dev                     | :5000 … :5004           | gossip                 |
+# | WebSocket                   | :8766                     | explorer live          |
+#
+# | chain_id | Где                          | feature_nft      |
+# |----------|------------------------------|------------------|
+# | 1337     | solo default                 | app default dev  |
+# | 77777    | devnet / testnet seed        | staging ok       |
+# | 778888   | industrial prod mesh         | MUST be false    |
+# | 778889   | app staging (council NFT)    | true             |
+#
+# Founder: 17.4% = 38 454 000 ABS · max supply 221 000 000
+# Проверка версии: (Invoke-RestMethod http://127.0.0.1:18180/status).node_version
+#
+
+
+# =============================================================================
+# КАРТА ЯРЛЫКОВ
+# =============================================================================
+#   [HYBRID]   — Ultimate_Hybrid repo (audit pin)
+#   [EXP]      — Experimental repo (R&D)
+#   [DEV]      — локальная разработка / devnet 77777
+#   [PROD]     — profile 778888 (не public mainnet)
+#   [STAGING]  — profile 778889 app/council
+#   [GATE]     — fail-closed проверка
+#   [LAB]      — lab script, не soak claim
+#   [HONEST]   — не заявлять mainnet / audit / 48h без evidence
+#   [SECRET]   — только .env (Part 24 — имена переменных)
+#
+
+
+# =============================================================================
+# ЧАСТЬ 0: БЫСТРЫЙ СТАРТ
+# =============================================================================
+
+# --- [EXP] Industrial mesh (основная R&D работа) ---
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+pip install -r requirements.txt
+.\scripts\build_native.ps1
+.\scripts\init_env.ps1
+# notepad .env  →  python scripts/apply_local_secrets.py
+
+# Поднять 3-node prod mesh + проверить (см. Часть 30 — обязательный порядок)
+.\scripts\docker_prod_3node.ps1 -SkipBuild -KeepVolumes
+.\scripts\probe_prod_mesh.ps1 -Quick
+python scripts/industrial_gate.py
+
+# --- [HYBRID] Audit-pin mesh (TCP+TLS, без libp2p Experimental) ---
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Ultimate_Hybrid
+.\scripts\build_native.ps1
+.\scripts\start_all.ps1 -SkipBuild -KeepVolumes
+# Explorer: :18180 :18181 :18182
+
+
+# =============================================================================
+# ЧАСТЬ 1: ПЕРВИЧНАЯ НАСТРОЙКА
+# =============================================================================
+
+pip install -r requirements.txt
+.\scripts\init_env.ps1
+notepad .env
+python scripts/apply_local_secrets.py
+
+.\scripts\build_native.ps1
+python -c "from crypto import native as n; print(n.self_test())"
+
+# Перед git push (оба репо):
+python scripts/check_secrets.py
+
+# Типичные .env флаги:
+#   DEPLOYMENT_MODE=dev|staging|prod
+#   ABS_REQUIRE_NATIVE_CRYPTO=true
+#   FEATURE_NFT=false          # prod mesh 778888
+#   FEATURE_LIBP2P=true        # Experimental mesh only
+#   FEATURE_LONG_RANGE=false   # prod JSON — всегда false (ADR 0017)
+
+
+# =============================================================================
+# ЧАСТЬ 2: ОДНА НОДА
+# =============================================================================
+
+.\scripts\start_node.ps1
+python main.py
+python main.py --config docker/node.staging.app.json    # [STAGING] council/NFT lab
+
+.\scripts\stop_node.ps1
+.\scripts\reset_genesis.ps1
+
+# Полный сброс data (ОСТОРОЖНО):
+# Remove-Item -Recurse -Force data\* -ErrorAction SilentlyContinue
+
+
+# =============================================================================
+# ЧАСТЬ 3–6: DEVNET DOCKER
+# =============================================================================
+
+# 2-node
+.\scripts\docker_devnet.ps1
+.\scripts\start_two_nodes.ps1 -Fresh
+
+# 3-node testnet (77777)
+.\scripts\docker_devnet_3node.ps1
+python scripts/verify_p2p_ci.py --mode devnet3 --wait 360
+
+# 5-validator
+.\scripts\docker_devnet_5validator.ps1
+python scripts/verify_p2p_ci.py --mode devnet5 --wait 360
+
+
+# =============================================================================
+# ЧАСТЬ 7: P2P — SYNC / VERIFY
+# =============================================================================
+
+python scripts/verify_p2p_ci.py --mode auto
+python scripts/verify_p2p_ci.py --mode prod-smoke
+.\scripts\verify_p2p.ps1
+
+Invoke-RestMethod http://127.0.0.1:8080/chain/consistency/harness
+Invoke-RestMethod http://127.0.0.1:8080/p2p/topology
+Invoke-RestMethod http://127.0.0.1:8080/sync/status
+
+.\scripts\mesh_stabilize.ps1
+.\scripts\mesh_heal_fork.ps1
+.\scripts\mesh_recover.ps1
+python scripts/check_mesh_catchup.py
+
+
+# =============================================================================
+# ЧАСТЬ 8: REST API — L1
+# =============================================================================
+
+Invoke-RestMethod http://localhost:8080/health/live
+Invoke-RestMethod http://localhost:8080/health/ready
+Invoke-RestMethod http://localhost:8080/status
+Invoke-RestMethod http://localhost:8080/features
+Invoke-RestMethod http://localhost:8080/tokenomics
+Invoke-RestMethod http://localhost:8080/pools/locks
+Invoke-RestMethod http://localhost:8080/pools/dao/status
+
+# TX (dev auto_sign — только локальный ключ)
+$body = '{"auto_sign":true,"to":"0x2222222222222222222222222222222222222222","value":0.01,"gas":21000}'
+Invoke-RestMethod http://localhost:8080/tx/send -Method POST -Body $body -ContentType 'application/json'
+
+
+# =============================================================================
+# ЧАСТЬ 9: BRIDGE [HONEST — OFF на prod mesh]
+# =============================================================================
+
+Invoke-RestMethod http://localhost:8080/bridge
+python scripts/bridge_off_audit_gate.py
+python scripts/bridge_l1_preflight.py
+# Документ: docs/BRIDGE_L1_MAINNET.md
+
+
+# =============================================================================
+# ЧАСТЬ 10–11: КОШЕЛЁК · JSON-RPC
+# =============================================================================
+
+Invoke-RestMethod "http://localhost:8080/wallet/balance/0xbeb0962327d6f0ad8de263bd883bb184e88744a2"
+
+curl -s -X POST http://127.0.0.1:8545 -H "Content-Type: application/json" -d "{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}"
+
+
+# =============================================================================
+# ЧАСТЬ 12: EVM · SPROUTS (ADR 0016)
+# =============================================================================
+# [HONEST] Не full Geth. Prod 778888: все feature_*=false кроме EVM depth в core.
+
+Invoke-RestMethod http://localhost:8080/features
+Invoke-RestMethod http://localhost:8080/nft/stats          # disabled на 778888
+
+# [LAB] EVM honesty (Experimental, без mesh):
+python scripts/evm_rpc_lab.py
+python scripts/evm_logs_lab.py
+python scripts/evm_filters_lab.py
+python scripts/oracle_lab.py
+python scripts/cross_shard_lab.py
+
+# Live mesh EVM smoke:
+python scripts/prod_evm_smoke.py
+python scripts/prod_signed_tx_smoke.py
+
+# Матрица: docs/sprouts/EVM_COMPAT_MATRIX.md
+
+
+# =============================================================================
+# ЧАСТЬ 13–14: EXPLORER · TELEGRAM
+# =============================================================================
+# http://localhost:8080  ·  ws://localhost:8766
+# Telegram: TELEGRAM_BOT_TOKEN в .env → автостарт из main.py
+
+
+# =============================================================================
+# ЧАСТЬ 15: PROD MESH DOCKER [PROD] chain 778888
+# =============================================================================
+
+# [EXP] libp2p Noise mesh (ADR 0020) — default в Experimental
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+.\scripts\docker_prod_3node.ps1 -SkipBuild -KeepVolumes
+# ⚠️  -P2pTls НЕ использовать в Experimental (refuse в скрипте)
+
+# [HYBRID] TCP+TLS overlay
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Ultimate_Hybrid
+.\scripts\docker_prod_3node.ps1 -CeremonyDir data\ceremony_keys -SkipBuild -KeepVolumes
+.\scripts\docker_prod_3node.ps1 -P2pTls -SkipBuild -KeepVolumes   # Hybrid only
+
+.\scripts\probe_prod_mesh.ps1 -Quick
+.\scripts\probe_prod_mesh.ps1
+python scripts/verify_prod_mesh_probe.py
+
+Invoke-RestMethod http://127.0.0.1:18180/health/ready
+Invoke-RestMethod http://127.0.0.1:18180/status
+
+.\scripts\start_all.ps1 -SkipBuild -KeepVolumes
+python scripts/mainnet_readiness.py --json
+
+
+# =============================================================================
+# ЧАСТЬ 16: ТЕСТЫ · INDUSTRIAL GATE [GATE]
+# =============================================================================
+
+.\scripts\check_all.ps1
+.\scripts\check_all.ps1 -Mode Standard
+python scripts/industrial_gate.py
+python scripts/verify_industrial_waves.py
+python scripts/final_audit.py
+python scripts/prod_gate.py
+
+pytest tests/unit/ -q
+pytest tests/ -q --ignore=tests/legacy
+
+# [EXP] Mid-soak honesty (disk units + needles; НЕ рестартит soak / Docker):
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+.\scripts\verify_midsoak_honesty.ps1 -Quick
+.\scripts\verify_midsoak_honesty.ps1 -WithSoakStatus
+.\scripts\verify_midsoak_honesty.ps1 -All
+.\scripts\verify_audit_remediation_2026_10_02.ps1 -Quick
+# Soak claim: NOT asserted by these scripts.
+
+# [EXP] Параллельный R&D batch (labs, не soak):
+python scripts/verify_parallel_rd_batch.py
+python scripts/verify_experimental_rd.py
+
+
+# =============================================================================
+# ЧАСТЬ 17: SOAK · EVIDENCE [HONEST]
+# =============================================================================
+# 48h PASS — только если docs/EVIDENCE_MATRIX.md + logs с passed=true, hard_fails=0
+
+.\scripts\prepare_48h_soak.ps1
+python scripts/soak_preflight.py
+.\scripts\soak_monitor.ps1 -ProdMesh -Hours 7
+.\scripts\verify_pre_soak.ps1
+.\scripts\verify_pre_soak.ps1 -SkipPrepare
+.\scripts\start_soak_prod_mesh_48h.ps1                 # operator: default 48h — явная команда
+.\scripts\start_soak_prod_mesh_48h_strict.ps1          # STRICT libp2p mesh — operator-ordered only
+.\scripts\start_soak_evm_mesh_48h_strict.ps1           # STRICT EVM mesh — operator-ordered only
+.\scripts\start_mempool_validation_soak.ps1            # mempool+validation STRICT — operator-ordered only
+.\scripts\health_watch.ps1 -ProdMesh -DurationMin 120  # 2h smoke pre-48h
+
+.\scripts\prod_mesh_failover.ps1
+.\scripts\prod_mesh_resilience_suite.ps1
+python scripts/post_soak_verify.py
+python scripts/record_evidence_run.py
+.\scripts\export_audit_pack.ps1
+
+# Evidence index: docs/EVIDENCE_MATRIX.md · docs/EXECUTION_ORDER.md
+
+
+# =============================================================================
+# ЧАСТЬ 18: ROCKSDB · DR
+# =============================================================================
+
+python scripts/backup_chainstore.py
+.\scripts\dr_restore_rehearsal.ps1 -DockerMesh1
+# Runbook: docs/DISASTER_RECOVERY.md
+
+
+# =============================================================================
+# ЧАСТЬ 19: P2P TRANSPORT
+# =============================================================================
+
+# [HYBRID] TCP+TLS mTLS overlay
+python scripts/gen_p2p_mesh_tls.py
+.\scripts\docker_prod_3node_p2ptls.ps1
+.\scripts\probe_p2p_tls_mesh.ps1
+
+# [EXP] libp2p rust (ADR 0018–0020)
+python scripts/verify_adr0019_libp2p.py
+python scripts/verify_adr0019_libp2p_hard.ps1
+# libp2p unit labs: scripts/libp2p_rust_*_lab.py (много — только при отладке)
+python scripts/package_libp2p_evidence.py
+
+# Blocker status: docs/sprouts/LIBP2P_48H_PREP.md
+
+
+# =============================================================================
+# ЧАСТЬ 20: CEREMONY · VALIDATORS
+# =============================================================================
+
+python scripts/genesis_ceremony.py --write data/genesis_ceremony.json
+python scripts/genesis_ceremony_keygen.py
+python scripts/ceremony_preflight.py
+.\scripts\pin_ceremony_hash.ps1
+.\scripts\ceremony_evidence_suite.ps1
+
+Invoke-RestMethod http://localhost:8080/validators/registry
+# Документ: docs/GENESIS_CEREMONY.md
+
+
+# =============================================================================
+# ЧАСТЬ 21: PUBLIC TESTNET
+# =============================================================================
+
+.\scripts\docker_testnet_seed.ps1
+.\scripts\testnet_evidence_suite.ps1
+python scripts/public_testnet_gate.py
+# [HONEST] Public DNS/mainnet listing — not claimed
+
+
+# =============================================================================
+# ЧАСТЬ 22: OBSERVABILITY · K8s
+# =============================================================================
+
+Invoke-RestMethod http://127.0.0.1:18180/metrics
+python scripts/k8s_prod_gate.py
+# ADR 0015: docs/adr/0015-observability-secret-management.md
+
+
+# =============================================================================
+# ЧАСТЬ 23: ДИАГНОСТИКА
+# =============================================================================
+
+Get-NetTCPConnection -LocalPort 8080,18180,18181,18182,19080 -ErrorAction SilentlyContinue
+Get-Content data\node.log -Tail 80
+docker logs abs-prod-mesh3-node1-1 --tail 80    # имя контейнера может отличаться
+
+.\scripts\cleanup_disk.ps1
+python scripts/check_blockchain.py
+python scripts/verify_full_blockchain.py
+
+
+# =============================================================================
+# ЧАСТЬ 24: СЕКРЕТЫ — ШАБЛОН (значения ТОЛЬКО в .env проекта)
+# =============================================================================
+# ⚠️  Не вставлять реальные ключи в этот файл. Только имена + назначение.
+#     Рабочий .env: ...\Absolute_Blockchain_Experimental\.env
+#                   ...\Absolute_Blockchain_Ultimate_Hybrid\.env
+#     Применить: python scripts/apply_local_secrets.py
+# =============================================================================
+
+# OPENWEATHER_API_KEY=        # /oracles/weather (demo без ключа)
+# WEATHERAPI_KEY=             # fallback weather oracle
+# TELEGRAM_BOT_TOKEN=         # Telegram bot autostart
+# TELEGRAM_ADMIN_CHAT_IDS=    # optional admin chats
+# WALLET_PRIVATE_KEY=         # dev auto_sign (64 hex) — НЕ в git
+# JWT_SECRET=                 # admin JWT; council genesis-mint на staging
+# GITHUB_TOKEN=               # gh CLI / git push (scope: repo)
+# BRIDGE_ORACLE_SECRET=       # HMAC bridge oracle
+# ETH_RPC_URL=                # bridge L1 probe (Infura/Alchemy)
+# RPC_API_KEYS=               # X-API-Key на prod RPC :18545–:18548
+# RPC_API_KEY_REQUIRED=true
+# DUP_SDK_BASE_URL=           # sdk Client.from_env (e.g. http://127.0.0.1:18180)
+# DUP_SDK_API_KEY=            # optional; else first RPC_API_KEYS entry
+# DUP_SDK_BEARER=             # admin JWT or RPC key as Bearer (eth_* / JWT POSTs)
+# DUP_SDK_JWT=                # alias of DUP_SDK_BEARER
+# ABS_ADMIN_JWT=              # optional alias for minted admin JWT
+# ABS_ALLOW_DEV_ADMIN_JWT=1   # lab-only: allow /auth/token mint outside prod
+# GENESIS_CEREMONY_HASH=      # prod docker pin
+# VALIDATORS_MANIFEST_PATH=data/validators.manifest.json
+# DEPLOYMENT_MODE=prod|staging|dev
+# ABS_REQUIRE_NATIVE_CRYPTO=true
+# SECRET_BACKEND=env          # ADR 0015 (file refused in prod)
+# NGROK_AUTHTOKEN=            # ngrok tunnel (optional)
+
+# Публичные адреса (можно хранить здесь):
+FOUNDER_ADDRESS=0xbeb0962327d6f0ad8de263bd883bb184e88744a2
+FOUNDER_NAME=Uladzimir Dabranski
+FOUNDER_INITIALS=D.U.P.
+FOUNDER_ALLOCATION_ABS=38454000
+ECOSYSTEM_POOL=0xecosystem000000000000000000000000000001
+TREASURY_POOL=0xtreasury00000000000000000000000000001
+
+GITHUB_USERNAME=Gruver87
+GITHUB_REPO_HYBRID=dup-protocol
+GITHUB_REPO_EXPERIMENTAL=dup-protocol-experimental
+CONTACT_EMAIL=gruverpetrov@gmail.com
+
+# Чеклист:
+#   1. python scripts/check_secrets.py перед push
+#   2. Не коммитить data/wallet.json с private_key
+#   3. При утечке — rotate BotFather / GitHub / Infura / JWT / RPC keys
+
+
+# =============================================================================
+# ЧАСТЬ 25: GIT · ПУТИ
+# =============================================================================
+
+# [EXP]
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+git status
+git pull origin main
+git push origin main
+
+# [HYBRID]
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Ultimate_Hybrid
+git pull origin master
+git push origin master
+
+# Ключевые пути (оба репо, структура похожа):
+#   main.py                    entry
+#   runtime/config.py          flags, deployment_mode
+#   runtime/tokenomics.py      221M, founder 17.4%
+#   runtime/pool_locks.py      validator DAO unlock pools
+#   features/council_nft.py    [EXP] ADR 0022 council mint
+#   features/nft.py            marketplace (Profile C)
+#   docs/adr/                  ADR 0001–0022 (EXP: +0017–0022)
+#   docs/EVIDENCE_MATRIX.md    proven vs not
+#   docs/EXECUTION_ORDER.md    [EXP] blockers B1–B3
+#   docs/sprouts/              deployment profiles A–F
+#   scripts/industrial_gate.py [GATE]
+#   sdk/dup_sdk/               [EXP] thin operator SDK v0.1
+#   docs/AUDIT_90D_FIX_PLAN.md AUDIT A–H
+#   docs/FIRM_KICKOFF_CHECKLIST.md  Phase 6 org
+#   docs/sprouts/AI_LAB_PROFILE.md  AI/MEV lab
+
+
+# =============================================================================
+# ЧАСТЬ 26: СЦЕНАРИИ ДНЯ
+# =============================================================================
+
+# A) [EXP] Утро — mesh + gate
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+git pull
+.\scripts\build_native.ps1
+.\scripts\docker_prod_3node.ps1 -SkipBuild -KeepVolumes
+.\scripts\probe_prod_mesh.ps1 -Quick
+python scripts/industrial_gate.py
+
+# B) Перед push
+python scripts/check_secrets.py
+python scripts/verify_parallel_rd_batch.py
+
+# C) [STAGING] Council NFT ceremony
+docker compose -p abs-staging-app -f docker-compose.staging.app.yml up -d --build
+python scripts/guarantor_council_manifest_gen.py
+python scripts/guarantor_council_staging_ceremony.py --dry-run
+# $env:JWT_SECRET = "changeme"  # from staging .env — never commit a real secret
+python scripts/guarantor_council_staging_ceremony.py --base-url http://127.0.0.1:19080
+
+# D) Evidence pack
+.\scripts\export_audit_pack.ps1 -Json
+
+# E) [EXP] AUDIT 90D + Phase 6 prep + SDK + AI lab
+.\scripts\verify_audit_90d_all.ps1 -SkipGate
+.\scripts\verify_audit_engagement_prep.ps1
+.\scripts\print_firm_handoff.ps1
+python scripts/dup_sdk_lab.py
+python scripts/ai_lab.py
+python scripts/ai_ops_anomaly.py --offline-only
+python scripts/nft_lab.py
+
+
+# =============================================================================
+# ЧАСТЬ 27: УСТАРЕВШЕЕ — НЕ ИСПОЛЬЗОВАТЬ
+# =============================================================================
+#
+# | Было                              | Сейчас                              |
+# |-----------------------------------|-------------------------------------|
+# | python node_persistent.py         | python main.py                      |
+# | POST /api/mine                    | автомайнинг в main.py               |
+# | -P2pTls на Experimental mesh      | REFUSE — libp2p Noise ADR 0020      |
+# | feature_nft=true на 778888        | industrial_gate FAIL                |
+# | feature_long_range=true prod JSON | ADR 0017 lab only                   |
+# | «87 NFT гаранты L1»               | council governance only (ADR 0022)  |
+# | Claim libp2p 48h без evidence     | см. EVIDENCE_MATRIX (35104db0 FAIL) |
+# | Extended API :8081 отдельный      | :8081 = node2 REST                  |
+#
+
+
+# =============================================================================
+# ЧАСТЬ 28: ADR · PROFILES (0016)
+# =============================================================================
+#
+# | Profile | chain_id | Назначение                          |
+# |---------|----------|-------------------------------------|
+# | A Industrial L1 | 778888 | prod mesh, feature_*=false   |
+# | B Bridge cutover| (ADR 0010) | bridge lab                 |
+# | C App staging | 778889 | NFT + council                  |
+# | D L2 sandbox  | aux DB | plasma/lightning/wasm          |
+# | E Shard lab   | separate mesh | sharding lab            |
+# | F Experimental| lab flags | libp2p, long-range         |
+#
+# Документы: docs/sprouts/README.md
+# ADR 0022 council: docs/GRUVER87_COUNCIL_CHARTER.md
+
+
+# =============================================================================
+# ЧАСТЬ 29: HYBRID vs EXPERIMENTAL — КОГДА ЧТО
+# =============================================================================
+#
+# | Задача                         | Репо          |
+# |--------------------------------|---------------|
+# | Audit-pin / tip-v2 industrial  | HYBRID        |
+# | libp2p mesh / 48h soak R&D     | EXPERIMENTAL  |
+# | Long-Range lab                 | EXPERIMENTAL  |
+# | Council 87 NFT                 | EXPERIMENTAL  |
+# | EVM depth labs                 | EXPERIMENTAL  |
+# | Thin SDK / AI sprouts / AUDIT 90D | EXPERIMENTAL |
+# | Firm audit engagement (pin scope)| PIN (dup-protocol) |
+# | TCP+TLS mTLS prod reference    | PIN (Hybrid folder) |
+# | Port fixes back to audit pin   | merge Hybrid  |
+#
+# Не смешивать: Long-Range + audit pin mesh · NFT on 778888
+
+
+# =============================================================================
+# ЧАСТЬ 30: L1 INTEGRATION GATE [GATE] — обязательный порядок (Windows)
+# =============================================================================
+# После изменений core / EVM / P2P / sync / bridge / native — В ТАКОМ ПОРЯДКЕ:
+
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+.\scripts\build_native.ps1
+.\scripts\docker_prod_3node.ps1 -SkipBuild -KeepVolumes
+.\scripts\probe_prod_mesh.ps1 -Quick
+python scripts/industrial_gate.py
+
+# FAIL probe → docker logs на упавшую ноду, fix runtime, не claim pass от pytest alone
+
+
+# =============================================================================
+# ЧАСТЬ 31: EXPERIMENTAL R&D [LAB]
+# =============================================================================
+
+# Параллельный batch (labs + unit subset + gate):
+python scripts/verify_parallel_rd_batch.py
+
+# Long-Range preflight (2h/48h NOT started без команды):
+python scripts/long_range_lab_2h_harness.py
+python -m pytest tests/unit -k long_range -q
+
+# Mempool ADR 0021 phase 0 fixtures:
+python -m pytest tests/unit/test_adr0021_phase1_fixtures.py -q
+
+# libp2p evidence pack:
+python scripts/package_libp2p_evidence.py
+
+# Execution order / blockers:
+#   docs/EXECUTION_ORDER.md
+#   B1/B2/B3 CLOSED · Phases 1–5 closed · next Phase 6 org (firm)
+#   STRICT packs: lp2pstrict1 · lrstrict1 · evmstrict1 · mempool48pass1
+
+
+# =============================================================================
+# ЧАСТЬ 32: GRUVER87 COUNCIL NFT [STAGING] ADR 0022
+# =============================================================================
+# 87 steward NFT · birth 1987 / Gruver87 · НЕ L1 security · НЕ prod 778888
+
+# Документы:
+#   docs/adr/0022-gruver87-genesis-council-governance.md
+#   docs/GRUVER87_COUNCIL_CHARTER.md
+#   docs/GRUVER87_LONG_TERM_TRUST_MODEL.md
+#   docs/genesis/gruver87-council-manifest.json
+
+# Генерация manifest (87 SVG + SHA-256):
+python scripts/guarantor_council_manifest_gen.py
+python scripts/guarantor_council_manifest_gen.py --check
+
+# Design labs (без Docker):
+python scripts/guarantor_council_lab.py
+python scripts/guarantor_council_staging_mint_lab.py
+
+# Staging compose Profile C (chain 778889):
+docker compose -p abs-staging-app -f docker-compose.staging.app.yml up -d --build
+docker compose -p abs-staging-app -f docker-compose.staging.app.yml down -v
+
+# REST (staging :19080):
+Invoke-RestMethod http://127.0.0.1:19080/council/manifest?summary=1
+Invoke-RestMethod http://127.0.0.1:19080/council/stats
+Invoke-RestMethod http://127.0.0.1:19080/nft/stats
+
+# Genesis mint ceremony (admin JWT = JWT_SECRET из staging .env):
+python scripts/mint_admin_jwt.py
+python scripts/guarantor_council_staging_ceremony.py --dry-run
+python scripts/guarantor_council_staging_ceremony.py --base-url http://127.0.0.1:19080
+
+# POST вручную:
+# Invoke-RestMethod http://127.0.0.1:19080/council/genesis-mint -Method POST -Headers @{Authorization="Bearer <JWT>"} -Body '{}' -ContentType 'application/json'
+
+# Unit:
+python -m pytest tests/unit/test_council_nft.py -q
+
+# [HONEST] Not claimed: mainnet council · signed on-chain gov · 48h council soak
+
+
+
+# =============================================================================
+# ЧАСТЬ 33: AUDIT 90D A–H [GATE] [HONEST]
+# =============================================================================
+# Money honesty + engagement prep. NOT soak / NOT firm PASS / NOT mainnet.
+# Docs: docs/AUDIT_90D_FIX_PLAN.md · docs/EXTERNAL_AUDIT_ENGAGEMENT.md
+
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+
+# Единый прогон A–H (+ industrial_gate внутри -Phase All):
+.\scripts\verify_audit_90d_all.ps1
+.\scripts\verify_audit_90d_all.ps1 -SkipGate
+
+# По фазам:
+.\scripts\verify_audit_phase.ps1 -Phase A
+.\scripts\verify_audit_phase.ps1 -Phase G          # satoshi dual-write / money refuse
+.\scripts\verify_audit_phase.ps1 -Phase H          # engagement prep
+.\scripts\verify_audit_phase.ps1 -Phase All
+
+# Phase 5 host re-verify (oracle/shard/bridge OFF — NOT soak):
+.\scripts\verify_oracle_lab.ps1 -SkipGate
+.\scripts\verify_cross_shard_lab.ps1 -SkipGate
+.\scripts\verify_bridge_off_lab.ps1
+# Pack: docs/evidence/runs/phase5reverify2/
+
+# Money / industrial honesty helpers:
+.\scripts\verify_adr0021_wire_satoshi.ps1
+.\scripts\verify_persist_fail_closed.ps1
+.\scripts\verify_native_f64_hygiene.ps1
+.\scripts\verify_industrial_high_honesty.ps1
+
+
+# =============================================================================
+# ЧАСТЬ 34: PHASE 6 FIRM KICKOFF [ORG] [HONEST]
+# =============================================================================
+# Automated prep PASS ≠ firm audit PDF. Tracker expect 6/8; 2 human pending.
+
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+
+.\scripts\verify_audit_engagement_prep.ps1
+.\scripts\print_firm_handoff.ps1
+python scripts/external_audit_tracker.py --list
+python scripts/external_audit_tracker.py --show-automated
+
+# Docs (fill brackets / NDA — human only):
+#   docs/FIRM_KICKOFF_CHECKLIST.md
+#   docs/FIRM_OUTREACH_LETTER.md
+#   docs/AUDIT_ENGAGEMENT_BRIEF.md
+#   docs/EXTERNAL_AUDIT_ENGAGEMENT.md
+#   docs/evidence/runs/phase6prep1/
+
+# Primary firm scope = PIN tag (not Experimental as «audited»):
+#   https://github.com/Gruver87/dup-protocol
+#   tag: v1.3.1339-tip-v2-industrial
+
+# Record tip SHA at kickoff:
+git rev-parse HEAD
+
+# After REAL firm evidence only (https URL + real note — no TBD):
+# python scripts/external_audit_tracker.py --set "External penetration test scheduled" --note "..." --evidence-url "https://..."
+# python scripts/external_audit_tracker.py --set "Third-party smart-contract / L1 security audit completed" --note "..." --evidence-url "https://..."
+
+
+# =============================================================================
+# ЧАСТЬ 35: THIN OPERATOR SDK v0.1 [LAB] [EXP]
+# =============================================================================
+# sdk/dup_sdk — status/health/balance_satoshi/tx submit. NOT pin SDK / NOT PyPI / NOT wallet.
+
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+$env:PYTHONPATH = "$PWD;$env:PYTHONPATH"
+
+python -c "from sdk.dup_sdk import Client, HONESTY, __version__; print(__version__, HONESTY)"
+python -m pytest tests/unit/test_dup_sdk.py -q
+python scripts/dup_sdk_lab.py
+python scripts/dup_sdk_lab.py --base-url http://127.0.0.1:18180
+
+# Auth for eth_* on prod mesh (jwt_enforce_admin): need ADMIN JWT, not only X-API-Key
+# Values ONLY in .env / session — never paste secrets into this file:
+#   $env:DUP_SDK_BASE_URL = "http://127.0.0.1:18180"
+#   $env:DUP_SDK_API_KEY  = "<from RPC_API_KEYS>"
+#   $env:DUP_SDK_BEARER   = (python scripts/mint_admin_jwt.py)   # needs JWT_SECRET
+#   python -c "from sdk.dup_sdk import Client; c=Client.from_env(); print(c.auth_configured()); print(c.get_block_number())"
+
+# Docs: sdk/README.md
+
+
+# =============================================================================
+# ЧАСТЬ 36: AI / MEV SPROUTS LAB [LAB] [EXP]
+# =============================================================================
+# feature_ai_agents / feature_ai_validator / feature_mev MUST stay false on prod 778888 JSON.
+# NOT consensus-wired / NOT soak / NOT mainnet.
+
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+
+python scripts/ai_lab.py
+python scripts/ai_ops_anomaly.py --offline-only
+python scripts/ai_ops_anomaly.py
+python -m pytest tests/unit/test_ai_sprout_harden.py tests/unit/test_wave43_ai_agents.py -q
+
+# Profile: docs/sprouts/AI_LAB_PROFILE.md
+# Code: features/ai_manager.py · ai_ports.py · ai_validator.py · ai_ops.py · mev_analyzer.py
+
+
+# =============================================================================
+# EVIDENCE PACKS (quick map — claim ONLY if pack says passed=true)
+# =============================================================================
+# [EXP] docs/evidence/runs/
+#   3c801b87 / lp2pstrict1     libp2p 48h / STRICT
+#   lr48pass1 / lrstrict1      Long-Range lab / STRICT
+#   evm48pass1 / evmstrict1    EVM mesh / STRICT
+#   mempool48pass1             mempool+validation STRICT
+#   ind48pass1                 industrial tip 48h
+#   phase5reverify2            oracle/shard/bridge-OFF host re-verify (NOT soak)
+#   phase6prep1                firm kickoff PREP (NOT firm PASS)
+# [PIN] tip-v2: see Hybrid/pin EVIDENCE_MATRIX · tag v1.3.1339-tip-v2-industrial
+
+
+
+# =============================================================================
+# ЧАСТЬ 37: NFT MARKETPLACE LAB [LAB] [EXP]
+# =============================================================================
+# feature_nft MUST stay false on prod 778888. Profile C staging 778889 OK.
+# NOT ERC-721 / NOT consensus / NOT soak / NOT mainnet marketplace claim.
+
+cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+python scripts/nft_lab.py
+python -m pytest tests/unit/test_nft_marketplace_harden.py tests/unit/test_nft_uow.py -q
+# SDK reads: Client("http://127.0.0.1:19080").get_nft_stats()
+# Docs: docs/sprouts/NFT_LAB_PROFILE.md
+
+# =============================================================================
+# КОНЕЦ СПРАВОЧНИКА
+#   PIN: dup-protocol · Experimental: dup-protocol-experimental
+#   Brand: DUP Labs / DUP Protocol · Author D.U.P.
+#   Обновлять после major ADR / gate / evidence / SDK / audit-prep changes
+#   Бэкап перед большим edit: Absolute_Blockchain_All_Commands_FIXED.bak_YYYYMMDD.txt
+# =============================================================================

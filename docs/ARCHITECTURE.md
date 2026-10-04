@@ -1,0 +1,440 @@
+# Architecture (honest overview)
+
+**Updated:** 2026-10-01  
+**Brand:** [BRAND.md](BRAND.md) — **DUP Labs** · **DUP Protocol**  
+**Scope:** [Gruver87/dup-protocol-experimental](https://github.com/Gruver87/dup-protocol-experimental) — R&D sandbox. Domain ports match the industrial pin (ADR **0001–0016**); this tree also carries **0017–0021** labs.  
+**Not** a launched public mainnet. **Not** the audit-freeze pin.  
+**Industrial pin (sibling):** [`dup-protocol`](https://github.com/Gruver87/dup-protocol) tag [`v1.3.1339-tip-v2-industrial`](https://github.com/Gruver87/dup-protocol/releases/tag/v1.3.1339-tip-v2-industrial).  
+**Former name:** Absolute Blockchain Experimental.
+
+---
+
+## One-line summary
+
+**Python** owns orchestration (API, consensus policy, secrets, metrics export). **Domain services** (`sync/`, `storage/`, `core/components/`) own catch-up, fork reconcile, state apply, and persistence behind ports. **Rust/PyO3** (`abs_native`) accelerates crypto, satoshi-integer state roots, RocksDB, EVM kernels, and **rust-libp2p** (ADR 0019/0020). **Experimental prod mesh** (`778888`) transport = **libp2p Noise** (`feature_libp2p=true`) with **48h PASS** [`3c801b87`](evidence/runs/3c801b87/). Hybrid pin stays TCP+TLS.
+
+**Honesty:** Long-Range is lab-only (`feature_long_range=false` on prod JSON + staging). Lab mesh 2h [`lr2hmesh`](evidence/runs/lr2hmesh/) + lab 48h [`lr48pass1`](evidence/runs/lr48pass1/) + **STRICT 48h** [`lrstrict1`](evidence/runs/lrstrict1/) ≠ BLS ≠ mainnet. Phase 3 post-EVM mesh 48h PASS [`evm48pass1`](evidence/runs/evm48pass1/) + **EVM STRICT** [`evmstrict1`](evidence/runs/evmstrict1/) ≠ EVM-only 48h. Phase 4 ADR 0021 **closed** [`adr0021gaudit1`](evidence/runs/adr0021gaudit1/). Waves A–G honesty DX on main.
+
+---
+
+## R&D execution chain
+
+Honest progress columns for this sandbox (not Hybrid). Detail: [EXECUTION_ORDER](EXECUTION_ORDER.md) · [EVIDENCE_MATRIX](EVIDENCE_MATRIX.md) · funds/ПВТ: [DILIGENCE_BRIEF](DILIGENCE_BRIEF.md).
+
+| | Phase 1 | Phase 2a | Phase 2b | Phase 2c | Phase 2d | Phase 3 | Phase 3b | Phase 4 |
+|--|:-------:|:--------:|:--------:|:--------:|:--------:|:-------:|:--------:|:-------:|
+| **Track** | libp2p mesh 48h | LR solo 2h | LR 3-node mesh 2h | LR lab 48h | LR STRICT 48h | post-EVM mesh 48h | EVM STRICT 48h | Mempool Rust |
+| **ADR** | 0020 | 0017 | 0017 + Ed25519 | 0017 | 0017 | — | — | 0021 |
+| **Status** | **PASS** | **PASS** | **PASS** | **PASS** (B2) | **PASS** | **PASS** | **PASS** | **PASS** |
+| **Pack** | [`3c801b87`](evidence/runs/3c801b87/) | [`lr2h9f3a`](evidence/runs/lr2h9f3a/) | [`lr2hmesh`](evidence/runs/lr2hmesh/) | [`lr48pass1`](evidence/runs/lr48pass1/) | [`lrstrict1`](evidence/runs/lrstrict1/) | [`evm48pass1`](evidence/runs/evm48pass1/) | [`evmstrict1`](evidence/runs/evmstrict1/) | [`mempool48pass1`](evidence/runs/mempool48pass1/) |
+
+```mermaid
+flowchart TB
+  subgraph done ["Closed on Experimental"]
+    L1["libp2p 48h\n3c801b87"]
+    L2a["LR solo 2h\nlr2h9f3a"]
+    L2b["LR mesh 2h\nlr2hmesh"]
+    L2c["LR lab 48h\nlr48pass1"]
+    L2d["LR STRICT 48h\nlrstrict1"]
+    EVM["Phase3 mesh 48h\nevm48pass1"]
+    EVMs["Phase3b EVM STRICT\nevmstrict1"]
+    MP["Mempool Rust\nadr0021gaudit1"]
+  end
+  subgraph neverHere ["Never claimed here"]
+    HY["Hybrid audit pin"]
+    MN["Public mainnet"]
+    BLS["BLS quorum"]
+  end
+  L1 --> L2a --> L2b --> L2c --> L2d --> EVM --> EVMs --> MP
+  L2d -.->|not| BLS
+  MP -.->|separate cutover| HY
+  HY -.-> MN
+```
+
+| Layer | Experimental default | Lab / opt-in | Frozen off on prod JSON |
+|-------|----------------------|--------------|-------------------------|
+| Transport | **libp2p** ADR 0020 | TCP+TLS historical PASS `0a7932c4` | — |
+| Tip safety | AncestryWindow | Long-Range WS + tip gate (ADR 0017) | `feature_long_range=false` |
+| Execution | EVM waves 8–11 | filters / logs labs | — |
+| Mempool | Python orchestration | Rust phases 1–3 (ADR 0021) | — |
+| Oracles / shard | — | Profile E labs | `feature_oracles/sharding=false` |
+| Bridge | OFF | audit track | `bridge_enabled=false` |
+
+---
+
+## System map
+
+```mermaid
+flowchart TB
+  subgraph clients ["Clients"]
+    EX["Explorer / SPA"]
+    W["Wallets / RPC clients"]
+  end
+
+  subgraph edge ["Edge — Python"]
+    REST["REST :8080"]
+    JR["JSON-RPC :8545"]
+    WS["WebSocket"]
+    QF["QueryFacade · ADR 0011"]
+    MET["MetricsExporter · ADR 0015"]
+  end
+
+  subgraph orch ["Orchestration"]
+    MAIN["main.py · NodeOrchestrator"]
+    CFG["runtime.Config"]
+    SM["SecretManager · ADR 0015"]
+    CONS["Consensus · LMD-GHOST forest-stable · Finality"]
+    TIP["TipSafety + AncestryWindow · ADR 0001"]
+    GEN["Genesis artifact · followers"]
+    BR["BridgePort · ADR 0010 · OFF on mesh"]
+    STOP["Graceful shutdown · ADR 0014"]
+  end
+
+  subgraph net ["Network plane"]
+    P2P["P2PNode · Experimental mesh"]
+    DISP["p2p_dispatch handlers"]
+    CA["catchup_adapters"]
+    FA["fork_adapters"]
+    NIO["abs_native P2P IO · short poll"]
+    LP["rust-libp2p Noise · ADR 0019/0020 · default mesh"]
+    TCPH["TCP+TLS · historical PASS 0a7932c4"]
+  end
+
+  subgraph domain ["Domain — ports, no sockets"]
+    CAP["CatchUpPathA · ADR 0004"]
+    FORK["ForkReconcile · ADR 0005"]
+    SOL["SyncSolicitHub · ADR 0003"]
+    BC["Blockchain facade"]
+    SS["StateService · TxPipeline"]
+    SP["StoragePort · ADR 0006"]
+  end
+
+  subgraph persist ["Persistence"]
+    AD["RocksDBStorageAdapter"]
+    ROCKS[("RocksDB chainstore")]
+    AUX[("SQLite aux.db")]
+    GJSON[("shared genesis JSON")]
+  end
+
+  subgraph rust ["abs_native — Rust"]
+    CRYPTO["Merkle · ECDSA · Keccak"]
+    SR["StateRoot · satoshi domain"]
+    RE["RocksEngine"]
+    GHOST["ghost_select_head forest-aware"]
+  end
+
+  EX --> REST
+  W --> JR
+  REST --> QF
+  JR --> QF
+  REST --> MET
+  REST --> MAIN
+  JR --> MAIN
+  WS --> MAIN
+  QF --> BC
+  MAIN --> CFG
+  MAIN --> SM
+  MAIN --> CONS
+  MAIN --> P2P
+  MAIN --> BC
+  MAIN --> BR
+  MAIN --> STOP
+  MAIN --> GEN
+  CONS --> TIP
+  CONS --> GHOST
+  P2P --> DISP
+  P2P --> CA
+  P2P --> FA
+  P2P --> NIO
+  P2P --> LP
+  P2P -.->|historical TCP+TLS| TCPH
+  LP --> NIO
+  CA --> CAP
+  FA --> FORK
+  P2P --> SOL
+  CAP --> BC
+  FORK --> BC
+  GEN -.->|import #0| BC
+  GEN -.-> GJSON
+  BC --> SS
+  SS --> SP
+  SP --> AD
+  AD --> ROCKS
+  AD -.-> AUX
+  SS --> CRYPTO
+  SS --> SR
+  AD --> RE
+  TIP --> BC
+```
+
+Solid = **Experimental prod-relevant hot path** (libp2p mesh). Dotted = **aux / historical / optional**.
+
+ADR index: [docs/adr/](adr/) (**0001–0021**, 0013 unused; [README](adr/README.md)). Feature sprouts: [docs/sprouts/](sprouts/). Disaster runbooks: [DISASTER_RECOVERY.md](DISASTER_RECOVERY.md).
+
+---
+
+## Domain isolation (ADR stack)
+
+```mermaid
+flowchart LR
+  subgraph wire ["Wire / I/O"]
+    TCP["network/p2p_node.py"]
+    DISP2["network/p2p_dispatch/"]
+    ADAPT["*_adapters.py"]
+  end
+
+  subgraph ports ["Ports"]
+    CP["CatchUp*Port"]
+    FP["ForkReconcile*Port"]
+    STP["StoragePort"]
+  end
+
+  subgraph svc ["Services"]
+    A["CatchUpPathAService"]
+    F["ForkReconcileService"]
+    S["RocksDBStorageAdapter"]
+  end
+
+  TCP --> DISP2
+  TCP --> ADAPT
+  ADAPT --> CP
+  ADAPT --> FP
+  ADAPT --> STP
+  CP --> A
+  FP --> F
+  STP --> S
+```
+
+| ADR | Boundary | What moved out of P2P / Blockchain |
+|-----|----------|-------------------------------------|
+| [0001](adr/0001-tip-safety.md) | TipSafety | Import refuse before tip/finality greenwash |
+| [0002](adr/0002-p2p-transport-boundary.md) | Transport | Native frame / TLS policy at the edge |
+| [0003](adr/0003-sync-consistency.md) | Solicit hub | Unsolicited `state_root` / blocks honesty |
+| [0004](adr/0004-catchup-path-a.md) | Catch-up Path A | Ahead batch loop + `Sync incomplete` |
+| [0005](adr/0005-fork-reconcile.md) | Fork / GHOST | Same-height reorg + fail-closed Evidence |
+| [0006](adr/0006-storage-boundary.md) | StoragePort | Canonical UoW; `Blockchain` on `self.storage` |
+| [0007](adr/0007-consensus-boundary.md) | ConsensusPort | Round SM + Evidence/lockdown; adapter façade |
+| [0008](adr/0008-hotpath-wire-codec.md) | Wire codec | Hot-path encode/decode boundary |
+| [0009](adr/0009-optional-native-fallback.md) | Native fallback | Optional Py path when native absent (prod forbids) |
+| [0010](adr/0010-evm-bridge-boundary.md) | BridgePort | L1 lock-mint isolated; **OFF** on mesh |
+| [0011](adr/0011-rpc-api-boundary.md) | QueryFacade | Typed reads; DoS caps; no raw DB |
+| [0012](adr/0012-chaos-injection.md) | Chaos | Runtime fault injection (lab) |
+| *0013* | — | **Intentionally unused** |
+| [0014](adr/0014-graceful-shutdown-deep-health.md) | Shutdown / ready | SIGTERM · deep `/health/ready` |
+| [0015](adr/0015-observability-secret-management.md) | Metrics / secrets | Exporter + SecretManager ports |
+| [0016](adr/0016-feature-sprouts-profiles.md) | Sprouts | Profiles instead of kitchen-sink FEATURE_* |
+| [0017](adr/0017-long-range-research.md) | Long-Range | Lab WS + Ed25519 · mesh 2h + lab 48h + **STRICT 48h** [`lrstrict1`](evidence/runs/lrstrict1/) · **not** BLS/prod |
+| [0018](adr/0018-libp2p-transport.md) | Dual-stack stubs | Python labs (superseded for Experimental mesh by 0020) |
+| [0019](adr/0019-rust-libp2p-industrial.md) | rust-libp2p | Slices **A–DB** (phase 105) behind Cargo `libp2p` |
+| [0020](adr/0020-libp2p-industrial-mesh.md) | Experimental mesh | libp2p default on `778888` · **48h PASS** `3c801b87` · STRICT [`lp2pstrict1`](evidence/runs/lp2pstrict1/) |
+| [0021](adr/0021-mempool-validation-rust-phases.md) | Mempool Rust | Phases 0–3 + mesh bake + STRICT [`mempool48pass1`](evidence/runs/mempool48pass1/) + tip wire [`ind48pass1`](evidence/runs/ind48pass1/) |
+
+
+---
+
+## Experimental dual-stack (ADR 0019 / 0020)
+
+**Experimental industrial mesh (`778888`) default = rust-libp2p Noise** (ADR 0020) with 48h PASS [`3c801b87`](evidence/runs/3c801b87/) + STRICT [`lp2pstrict1`](evidence/runs/lp2pstrict1/). Hybrid audit-pin stays TCP+TLS. ADR 0019 slices remain the Cargo `libp2p` lab gate. Lab PASS ≠ Hybrid cutover ≠ public mainnet.
+
+```mermaid
+flowchart LR
+  subgraph def ["Default — industrial"]
+    TLS["P2PNode TCP+TLS · ADR 0002 / 0008"]
+  end
+  subgraph lab ["Opt-in lab — this sandbox"]
+    AD["Libp2pTransportAdapter"]
+    SW["abs_native swarm · Noise + Yamux"]
+    CAP["shared advertised cap 20 unique"]
+    ID["CappedIdentify / mDNS / Kad / AutoNAT / UPnP / DCUtR"]
+    PER["persist tmp.{pid}.{tid} · ACL refuse · parent attest"]
+    AD --> SW
+    SW --> CAP
+    SW --> ID
+    ID --> CAP
+    SW --> PER
+  end
+  TLS -.->|"FEATURE_LIBP2P=true only"| AD
+```
+
+| Column | GitHub / this repo | Runtime |
+|--------|--------------------|---------|
+| Experimental mesh | rust-libp2p (ADR 0020) | `feature_libp2p=true` on Experimental prod mesh JSON |
+| Hybrid pin mesh | TCP+TLS (ADR 0002 / 0008) | audit-pin JSON stays `feature_libp2p=false` |
+| Lab swarm | rust-libp2p ADR 0019 **A–DB** (phase 105) | Cargo `libp2p` + `FEATURE_LIBP2P` |
+| Advertise | unique cap **20**; circuit never in crate book | Identify/mDNS/Kad/AutoNAT/UPnP/DCUtR omit uncharged; relay-client circuit confirm omitted; AutoNAT/UPnP confirm gated; observed confirm charges canonical key; add/remove/expire match canonical key |
+| Persist | tmp+fsync+replace; `dest.{pid}.{tid}.tmp`; stale other-tid sweep | JSON last-writer-wins; identity first-create exclusive |
+| Identity | Unix 0600 / Windows protected DACL; parent ACL attested | weak/NULL/callback/unprotected DACL refuse; no silent rewrite |
+| Honesty | Lab PASS ≠ prod cutover ≠ Hybrid pin | NTFS replace **not** POSIX inode-atomic |
+
+Over-cap listen sockets are **omitted** from Identify, mDNS, Kademlia local addrs, AutoNAT probes, UPnP IGD maps, and DCUtR hole-punch candidates — not silently advertised. Identify also omits uncharged `NewExternalAddrCandidate` so they never reach the swarm. Circuit `/p2p-circuit` stays outside the unique charged cap **and** is never inserted into rust-libp2p `ExternalAddresses` (Slice CW). Relay-client reservation confirm (`ToSwarm::ExternalAddrConfirmed`) is omitted so the crate book cannot silently evict a charged addr (Slice CX). AutoNAT/UPnP `ExternalAddrConfirmed` is forwarded only after the canonical charge key is admitted, otherwise omitted (Slice CY). Identify `confirm_observed_addr` / auto-confirm / SwarmEvent confirm charge the canonical key (trailing `/p2p/<peer>` stripped) so a suffix variant cannot occupy a second unique slot; the API still returns the **raw** observed string (Slice CZ). Operator add/remove and AutoNAT/UPnP/relay-client expire match that same charge key so a suffix cannot occupy or miss the crate slot (Slice DA). Persist JSON load collapses the same suffix so restore cannot occupy a second unique (Slice DB). Circuit is still forwarded on Capped* `NewListenAddr` (Identify listen). The unique advertised ceiling is **20** (rust-libp2p `ExternalAddresses` book); past that we **refuse**, because the crate silently evicts oldest confirmed externals. Advertised-externals persist replaces dest without unlinking it first (Windows `MoveFileExW`). Bootstrap, learned peerstore JSON, and identity keystore first-create use the same tmp+fsync+replace path (no truncate-in-place). Staging tmp is per-thread; stale other-tid leftovers are swept without stealing in-flight writers. Corrupt existing identity keys refuse spawn. NTFS replace is still **not** POSIX inode-atomic.
+
+---
+
+## Repo layout (where to look)
+
+```text
+main.py                 boot · wires storage + sync engines
+api/                    REST + JSON-RPC + Explorer glue
+network/
+  p2p_node.py           TCP + thin sync/fork wires
+  p2p_dispatch/         status / unsolicited / solicit handlers
+  catchup_adapters.py   P2P → CatchUp ports
+  fork_adapters.py      P2P → ForkReconcile ports
+sync/
+  catchup/              Path A service + types
+  fork/                 ForkReconcileService + policy
+  solicit.py            SyncSolicitHub
+  genesis_artifact.py   shared ceremony #0 export/import
+core/blockchain.py      domain apply · StoragePort only
+storage/
+  ports.py              StoragePort / UoW contracts
+  adapters/             RocksDBStorageAdapter
+  factory.py            open_storage(db)
+consensus/
+  adapter.py            façade (legacy API + RoundStateMachine)
+  tip_safety/           TipSafety + AncestryWindow
+  ports.py              ConsensusPort / ValidatorRegistryPort
+  bft/                  Round SM · quorum · Evidence (ADR 0007)
+native/abs_native/      Rust crypto · Rocks · P2P IO · EVM
+runtime/                Config · prod smoke profile
+docs/adr/               boundary decisions 0001–0019 (0013 unused)
+docs/sprouts/           ADR 0016 feature profiles
+scripts/                industrial_gate · mesh · soak
+```
+
+---
+
+## What runs where
+
+| Component | Language | Prod (778888 prep) | Dev (77777) |
+|-----------|----------|-------------------|-------------|
+| REST / RPC / WS | Python | Yes | Yes |
+| P2P TCP + dispatch | Python | Yes (libp2p data plane, ADR 0020) | Yes |
+| rust-libp2p swarm | Rust PyO3 | **On** Experimental mesh (`feature_libp2p=true`); Hybrid pin stays off | Opt-in lab |
+| Catch-up / fork services | Python domain | Yes | Yes |
+| Consensus policy | Python | Unified LMD-GHOST + Round SM ports | Parallel/auto + Round SM |
+| Consensus BFT quorum live | — | **Not claimed** (`finality_quorum_live=False`) | Same |
+| TipSafety enforce | Python | **Required** | Optional |
+| Blockchain domain | Python → StoragePort | Yes | Yes |
+| State root / hashing | Rust PyO3 | Required | Required |
+| Chain storage hot path | RocksDB via adapter | **Required** | SQLite default |
+| Bridge L1 | Rust binary | **Off** until cutover | Optional |
+| Lightning / Plasma / WASM / AI | Python modules | Blocked / aux | Enabled in dev |
+
+---
+
+## Sync & storage honesty (short)
+
+```mermaid
+sequenceDiagram
+  participant Peer
+  participant P2P as P2PNode
+  participant PathA as CatchUpPathA
+  participant Tip as TipSafety
+  participant BC as Blockchain
+  participant Store as StoragePort
+
+  Peer->>P2P: height ahead + head
+  P2P->>PathA: run_ahead via to_thread
+  PathA->>P2P: fetch blocks adapters
+  PathA->>Tip: refuse before greenwash
+  Tip->>BC: import_block
+  BC->>Store: UoW + CAS tip advance
+  alt tip less than peer
+    PathA-->>P2P: Sync incomplete
+  else reached target
+    PathA-->>P2P: complete + baseline OK
+  end
+```
+
+### Follower boot (ceremony genesis)
+
+```mermaid
+sequenceDiagram
+  participant Leader as mesh-1 leader
+  participant Art as shared genesis JSON
+  participant F as follower mesh-2/3
+  participant P2P as P2PNode
+  participant PathA as CatchUpPathA
+
+  Leader->>Art: export #0 + founder_address
+  F->>Art: import artifact (prefer over local mint)
+  Note over F: tip_safety sees real genesis tip at h=0
+  F->>P2P: STATUS height 0 is present
+  P2P->>PathA: catch-up to leader tip
+  Note over P2P: soft-refuse tip_duplicate / TLS EOF — no PeerManager ban
+```
+
+---
+
+## Multi-node deployment
+
+```mermaid
+flowchart TB
+  subgraph shared ["data/prod_mesh/shared"]
+    GA["GENESIS_ARTIFACT_PATH"]
+  end
+
+  N1["mesh-1 leader :18180"]
+  N2["mesh-2 :18181"]
+  N3["mesh-3 :18182"]
+
+  N1 -->|export #0| GA
+  GA -->|import #0| N2
+  GA -->|import #0| N3
+  N1 <-- P2P mTLS --> N2
+  N2 <-- P2P mTLS --> N3
+  N1 <-- P2P mTLS --> N3
+```
+
+| Claim | Status |
+|-------|--------|
+| Bring-up + shared genesis + chain heights | **Proven** |
+| `/health/ready` always green (peers_alive) | **Partial** — TLS session churn open |
+| Bridge on mesh | **OFF** |
+
+Prod mesh: `scripts/docker_prod_3node.ps1` · probe: `scripts/probe_prod_mesh.ps1`
+
+---
+
+## Storage layout (prod)
+
+See [STORAGE_ROCKSDB.md](STORAGE_ROCKSDB.md).
+
+```
+data/
+  chainstore/     # RocksDB: blocks, accounts, txs, bridge, NFT marketplace, evm_logs
+    aux.db        # SQLite sidecar: lightning/plasma/wasm/oracles and other cold modules
+```
+
+Domain code talks **StoragePort** only; engine unwrap remains for Wave-G API/P2P compat (`bc.db`).
+
+Backup: `scripts/backup_chainstore.ps1 -DockerMesh1` · DR: `scripts/dr_restore_rehearsal.ps1`
+
+---
+
+## Quality gates
+
+| Gate | Where |
+|------|--------|
+| CI pytest + native build | `.github/workflows/test.yml` |
+| Docker prod image | `.github/workflows/docker-prod-image.yml` |
+| Dependency audit | `.github/workflows/security-audit.yml` |
+| Local full gate | `scripts/check_hybrid_full.ps1` |
+| Industrial / needle honesty | `scripts/industrial_gate.py` |
+| Prod profile enforcement | `scripts/prod_gate.py` |
+| State consistency | `GET /chain/consistency/harness` |
+
+---
+
+## Related docs
+
+- [EVIDENCE_MATRIX.md](EVIDENCE_MATRIX.md)
+- [AUDIT_ENGAGEMENT_BRIEF.md](AUDIT_ENGAGEMENT_BRIEF.md)
+- [PORTING_ROADMAP.md](PORTING_ROADMAP.md)
+- [MAINNET_GAP_ANALYSIS.md](MAINNET_GAP_ANALYSIS.md)
+- [STORAGE_ROCKSDB.md](STORAGE_ROCKSDB.md)
+- [PUBLIC_TESTNET.md](PUBLIC_TESTNET.md)
+- [DOCKER_IMAGES.md](DOCKER_IMAGES.md)
+- [INDUSTRIAL_HARDEN_RUNBOOK.md](INDUSTRIAL_HARDEN_RUNBOOK.md)
+- [adr/0019-rust-libp2p-industrial.md](adr/0019-rust-libp2p-industrial.md)

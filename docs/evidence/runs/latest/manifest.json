@@ -1,0 +1,11 @@
+{
+  "schema": "abs.mesh_evidence.v1",
+  "pointer": "docs/evidence/runs/3c801b87/",
+  "honesty": "Experimental ADR 0020 libp2p 48h soak PASS 2026-09-01→03 (passed=true, hard_fails=0, mesh_warn=0). Not Long-Range. Not Hybrid 375d14f. Not public mainnet. TCP+TLS PASS remains docs/evidence/runs/0a7932c4/. Prior FAIL packs 35104db0 / 87f51b3e stay on the ledger.",
+  "files": {
+    "soak_report": {
+      "status": "present",
+      "path": "docs/evidence/runs/3c801b87/soak_report_48h_experimental.json"
+    }
+  }
+}

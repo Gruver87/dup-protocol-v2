@@ -1,0 +1,43 @@
+# P2P TLS overlay for docker-compose.prod.3node.yml
+# Default via: .\scripts\docker_prod_3node.ps1  (opt out: -NoP2pTls)
+# Manual: docker compose -f docker-compose.prod.3node.yml -f docker-compose.prod.3node.p2ptls.yml up -d
+#
+# Threat model (honest): TLS encrypts the wire; mTLS authenticates peer certs
+# against the mesh CA; handshake node_id is bound to cert CN/SAN (v1.2.87+).
+
+services:
+  node1:
+    environment:
+      P2P_TLS_ENABLED: "true"
+      P2P_TLS_CERT_PATH: /app/p2p_tls/node.pem
+      P2P_TLS_KEY_PATH: /app/p2p_tls/node.key
+      P2P_TLS_CA_PATH: /app/p2p_tls/ca.pem
+      P2P_TLS_REQUIRE_CLIENT_CERT: "true"
+      P2P_TLS_FAIL_CLOSED: "true"
+      P2P_TLS_BIND_IDENTITY: "true"
+    volumes:
+      - ./data/p2p_tls_prod_mesh/node1:/app/p2p_tls:ro
+
+  node2:
+    environment:
+      P2P_TLS_ENABLED: "true"
+      P2P_TLS_CERT_PATH: /app/p2p_tls/node.pem
+      P2P_TLS_KEY_PATH: /app/p2p_tls/node.key
+      P2P_TLS_CA_PATH: /app/p2p_tls/ca.pem
+      P2P_TLS_REQUIRE_CLIENT_CERT: "true"
+      P2P_TLS_FAIL_CLOSED: "true"
+      P2P_TLS_BIND_IDENTITY: "true"
+    volumes:
+      - ./data/p2p_tls_prod_mesh/node2:/app/p2p_tls:ro
+
+  node3:
+    environment:
+      P2P_TLS_ENABLED: "true"
+      P2P_TLS_CERT_PATH: /app/p2p_tls/node.pem
+      P2P_TLS_KEY_PATH: /app/p2p_tls/node.key
+      P2P_TLS_CA_PATH: /app/p2p_tls/ca.pem
+      P2P_TLS_REQUIRE_CLIENT_CERT: "true"
+      P2P_TLS_FAIL_CLOSED: "true"
+      P2P_TLS_BIND_IDENTITY: "true"
+    volumes:
+      - ./data/p2p_tls_prod_mesh/node3:/app/p2p_tls:ro

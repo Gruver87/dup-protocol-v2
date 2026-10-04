@@ -1,0 +1,148 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: abs-node
+  namespace: absolute-chain
+spec:
+  serviceName: abs-p2p
+  replicas: 3
+  podManagementPolicy: OrderedReady
+  selector:
+    matchLabels:
+      app: abs-node
+  template:
+    metadata:
+      labels:
+        app: abs-node
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        - name: wait-redis
+          image: redis:7-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          command:
+            - /bin/sh
+            - -c
+            - |
+              until redis-cli -h abs-redis -p 6379 ping | grep -q PONG; do
+                echo "waiting for abs-redis..."
+                sleep 2
+              done
+      containers:
+        - name: node
+          image: absolute-blockchain-prod:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          command: ["/bin/sh", "/app/deploy/k8s/entrypoint.sh"]
+          ports:
+            - name: http
+              containerPort: 8080
+            - name: rpc
+              containerPort: 8545
+            - name: p2p
+              containerPort: 5000
+            - name: ws
+              containerPort: 8766
+          envFrom:
+            - configMapRef:
+                name: abs-node-config
+            - secretRef:
+                name: abs-node-secrets
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: data
+              mountPath: /app/data
+            - name: node-config
+              mountPath: /app/config
+              readOnly: true
+            - name: p2p-tls-secrets
+              mountPath: /app/p2p_tls_secrets
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /health/live
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: http
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 12
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "250m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+      volumes:
+        - name: node-config
+          configMap:
+            name: abs-node-json
+            items:
+              - key: node.prod.k8s.json
+                path: node.prod.k8s.json
+        - name: p2p-tls-secrets
+          projected:
+            defaultMode: 0440
+            sources:
+              - secret:
+                  name: abs-p2p-tls
+                  optional: true
+                  items:
+                    - key: ca.pem
+                      path: ca.pem
+              - secret:
+                  name: abs-p2p-tls-node-0
+                  optional: true
+                  items:
+                    - key: tls.crt
+                      path: node-0.pem
+                    - key: tls.key
+                      path: node-0.key
+              - secret:
+                  name: abs-p2p-tls-node-1
+                  optional: true
+                  items:
+                    - key: tls.crt
+                      path: node-1.pem
+                    - key: tls.key
+                      path: node-1.key
+              - secret:
+                  name: abs-p2p-tls-node-2
+                  optional: true
+                  items:
+                    - key: tls.crt
+                      path: node-2.pem
+                    - key: tls.key
+                      path: node-2.key
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 20Gi

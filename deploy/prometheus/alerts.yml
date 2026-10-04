@@ -1,0 +1,282 @@
+# Prometheus alert rules for Absolute Blockchain node
+groups:
+  - name: absolute_blockchain_node
+    rules:
+      - alert: AbsoluteNodeDown
+        expr: absent(abs_uptime_seconds) or abs_uptime_seconds == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Absolute node {{ $labels.node_id }} is down"
+          description: "No uptime metric for 2 minutes."
+
+      - alert: AbsoluteNoPeers
+        expr: abs_peers_connected == 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Node {{ $labels.node_id }} has no P2P peers"
+          description: "Peer count is 0 for 10 minutes."
+
+      - alert: AbsoluteMempoolBacklog
+        expr: abs_mempool_size > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Large mempool on {{ $labels.node_id }}"
+          description: "Mempool size {{ $value }} > 500 for 5m."
+
+      - alert: AbsoluteHighErrorRate
+        expr: rate(abs_errors_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API error rate on {{ $labels.node_id }}"
+          description: "API error rate is above 1 error/sec for 5 minutes."
+
+      - alert: AbsoluteRustBridgeDown
+        expr: abs_rust_bridge_required == 1 and abs_rust_bridge_ok == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rust bridge is not ready on {{ $labels.node_id }}"
+          description: "Production bridge is required but abs_bridge_bin failed its JSON smoke-test."
+
+      - alert: AbsoluteL1RpcDown
+        expr: abs_l1_rpc_required == 1 and abs_l1_rpc_ok == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "L1 RPC unreachable on {{ $labels.node_id }}"
+          description: "Production bridge requires live L1 JSON-RPC but eth_blockNumber probe failed."
+
+      - alert: AbsoluteP2PShapeRejectBurst
+        expr: rate(abs_p2p_shape_rejects_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated P2P shape rejects on {{ $labels.node_id }}"
+          description: "Fail-closed wire/shape rejects are above 0.5/sec for 5 minutes."
+
+      - alert: AbsoluteP2PHandshakeRejectBurst
+        expr: rate(abs_p2p_handshake_rejects_total[5m]) > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated P2P handshake rejects on {{ $labels.node_id }}"
+          description: "Handshake rejects are above 0.2/sec for 5 minutes."
+
+      - alert: AbsoluteP2POpsErrorsBurst
+        expr: sum(rate(abs_p2p_ops_errors[5m])) by (node_id) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated P2P ops errors on {{ $labels.node_id }}"
+          description: "P2P operational error counters are rising above 0.5/sec for 5 minutes."
+
+      - alert: AbsoluteP2PBroadcastFailBurst
+        expr: rate(abs_p2p_ops_errors{kind="broadcast_fail"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P2P gossip broadcast failures on {{ $labels.node_id }}"
+          description: "block/tx/attestation/cross-shard gather send failures above 0.1/sec for 5 minutes."
+
+      - alert: AbsoluteP2PPeerSyncFailBurst
+        expr: rate(abs_p2p_ops_errors{kind="peer_sync_fail"}[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P2P peer sync failures on {{ $labels.node_id }}"
+          description: "peer_sync_fail ops errors above 0.1/sec for 5 minutes."
+
+      - alert: AbsoluteP2PCatchUpLoopFailBurst
+        expr: rate(abs_p2p_ops_errors{kind="catch_up_loop_fail"}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P2P catch-up loop failures on {{ $labels.node_id }}"
+          description: "catch_up_loop_fail ops errors above 0.05/sec for 5 minutes."
+
+      - alert: AbsoluteP2PAttestationLocalFailBurst
+        expr: rate(abs_p2p_attestation_local_fail_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Local attestation sign failures on {{ $labels.node_id }}"
+          description: "Validator attestation signing is failing above 0.1/sec for 5 minutes."
+
+      - alert: AbsoluteP2PPeerTxRejectBurst
+        expr: rate(abs_p2p_peer_tx_reject_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated peer tx rejects on {{ $labels.node_id }}"
+          description: "Semantic / mempool peer transaction rejects are above 0.5/sec for 5 minutes."
+
+      - alert: AbsoluteP2PActiveBansHigh
+        expr: abs_p2p_active_bans > 10
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High active P2P ban count on {{ $labels.node_id }}"
+          description: "More than 10 peer keys currently banned for 10 minutes."
+
+      - alert: AbsoluteP2PRateLimitBurst
+        expr: rate(abs_p2p_rate_limit_drops_total[5m]) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated P2P rate-limit drops on {{ $labels.node_id }}"
+          description: "Per-peer rate-limit strikes are above 1/sec for 5 minutes."
+
+      - alert: AbsoluteP2PPeerSendFailBurst
+        expr: rate(abs_p2p_peer_send_fail_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated P2P outbound send failures on {{ $labels.node_id }}"
+          description: "Peer.send failures are above 0.5/sec for 5 minutes."
+
+      - alert: AbsoluteStateInconsistent
+        expr: abs_peers_connected > 0 and abs_state_consistent == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "State root inconsistent with peers on {{ $labels.node_id }}"
+          description: "Node has peers but reports abs_state_consistent=0 for 2 minutes."
+
+      - alert: AbsoluteSyncWireProbeFail
+        expr: abs_peers_connected > 0 and abs_sync_wire_probe_probed == 1 and abs_sync_wire_probe_ok == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Peer state_root wire probe failing on {{ $labels.node_id }}"
+          description: "Wire probe completed and failed while peers are connected."
+
+      - alert: AbsoluteSyncWireProbeNeverProbed
+        expr: abs_peers_connected > 0 and (abs_sync_wire_probe_ok == -1 or abs_sync_wire_probe_probed == 0)
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Peer state_root wire probe never completed on {{ $labels.node_id }}"
+          description: "Peers connected for 15m but wire probe still unknown/unprobed (fail-closed)."
+
+      - alert: AbsoluteProdSqliteEngine
+        expr: abs_db_engine{engine="sqlite"} == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prod node using SQLite engine on {{ $labels.node_id }}"
+          description: "abs_db_engine reports sqlite; industrial prod mesh expects RocksDB."
+
+      - alert: AbsoluteProdCoreEngineMissing
+        expr: abs_native_crypto_required == 1 and (abs_state_engine_available == 0 or abs_finality_engine_available == 0 or abs_ims_available == 0)
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prod-like node missing core engine on {{ $labels.node_id }}"
+          description: "StateEngine, FinalityEngine, or ImmutableStateManager gauge is 0 while native crypto is required."
+
+      - alert: AbsoluteRocksJsonDecodeFailures
+        expr: increase(abs_rocksdb_json_decode_failures[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RocksDB JSON decode failures on {{ $labels.node_id }}"
+          description: "Corrupt RocksDB rows were skipped; investigate storage integrity."
+
+      - alert: AbsoluteSqliteJsonDecodeFailures
+        expr: increase(abs_sqlite_json_decode_failures[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SQLite/aux JSON decode failures on {{ $labels.node_id }}"
+          description: "Corrupt SQLite or aux.db JSON rows were skipped; investigate storage integrity."
+
+      - alert: AbsoluteWSSendFailBurst
+        expr: rate(abs_ws_send_failures_total[5m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Elevated WebSocket send failures on {{ $labels.node_id }}"
+          description: "WS outbound send failures are above 0.5/sec for 5 minutes."
+
+      - alert: AbsoluteRocksBlockCacheUnset
+        expr: abs_native_crypto_required == 1 and abs_rocksdb_block_cache_mb == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RocksDB block cache unset on {{ $labels.node_id }}"
+          description: "Prod-like node (native crypto required) reports rocksdb block_cache_mb=0."
+
+      - alert: AbsoluteRocksWriteBufferUnset
+        expr: abs_native_crypto_required == 1 and abs_rocksdb_write_buffer_mb == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RocksDB write buffer unset on {{ $labels.node_id }}"
+          description: "Prod-like node (native crypto required) reports rocksdb write_buffer_mb=0."
+
+      - alert: AbsoluteMempoolStoreDemoted
+        expr: abs_mempool_store_demoted == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool store demoted to Python on {{ $labels.node_id }}"
+          description: "Rust MempoolStore demoted; scrape abs_mempool_store_backend / demote_count."
+
+      - alert: AbsoluteMempoolStoreDemoteBurst
+        expr: increase(abs_mempool_store_demote_count[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mempool store demote event(s) on {{ $labels.node_id }}"
+          description: "demote_count increased in the last hour; investigate native store faults."
+
+      - alert: AbsoluteP2PUnderMesh
+        expr: abs_p2p_under_mesh == 1
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P2P under_mesh on {{ $labels.node_id }}"
+          description: "Peer count below mesh_min for 15m (Wave D honesty); forging may be gated."
+
+      - alert: AbsoluteRocksNativePackFallbacks
+        expr: increase(abs_rocksdb_native_pack_fallbacks[1h]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RocksDB native pack→JSON fallbacks on {{ $labels.node_id }}"
+          description: "Wave C honesty: native pack_* fell back to JSON; check ABS_REQUIRE_NATIVE_CRYPTO / Rocks integrity."
