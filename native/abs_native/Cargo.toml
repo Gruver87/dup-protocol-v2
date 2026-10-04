@@ -36,7 +36,7 @@ primitive-types = "0.12"
 num-bigint = "0.4"
 num-traits = "0.2"
 rust_decimal = { version = "1", default-features = false, features = ["std"] }
-libp2p = { version = "0.54", optional = true, default-features = false, features = [
+libp2p = { version = "0.57", optional = true, default-features = false, features = [
     "tokio",
     "tcp",
     "noise",
