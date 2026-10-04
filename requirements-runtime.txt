@@ -7,5 +7,5 @@ py_ecc==8.0.0
 websockets==15.0.1
 requests==2.33.1
 PyJWT==2.15.1
-redis==6.4.0
+redis==8.1.0
 wasmtime==49.0.0; platform_system != "Windows" or platform_machine == "AMD64"
