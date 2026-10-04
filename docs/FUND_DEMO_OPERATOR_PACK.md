@@ -24,7 +24,7 @@ This page is the **operator checklist** after the 2026-10-03 diligence + money-h
 ## Pre-meeting verify (operator)
 
 ```powershell
-cd C:\Users\vovun\Desktop\Absolute_Blockchain_Experimental
+cd C:\Users\vovun\Desktop\dup-protocol-v2
 
 # Honesty needles + units (no mesh restart)
 .\scripts\verify_midsoak_honesty.ps1 -Quick

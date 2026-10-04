@@ -1,63 +1,18 @@
-# Experimental sandbox (NOT the audit pin)
+# Sandbox rules for this tree (DUP Protocol v2 polygon)
 
-This folder / [Gruver87/dup-protocol-experimental](https://github.com/Gruver87/dup-protocol-experimental) is an **R&D copy** of the DUP Protocol industrial pin (GitHub repo still named Absolute Blockchain Ultimate Hybrid — URL unchanged).
+This folder / [Gruver87/dup-protocol-v2](https://github.com/Gruver87/dup-protocol-v2) is a **merge polygon**, not the live industrial pin and not the live Experimental line.
 
 | Path | Role |
 |------|------|
-| `Desktop\Absolute_Blockchain_Ultimate_Hybrid` | **Audit freeze** — tip-v2 industrial pin `v1.3.1339-tip-v2-industrial`. Do not break for firm audit. |
-| `Desktop\Absolute_Blockchain_Experimental` | **This copy** — libp2p / Long-Range / deeper EVM experiments. |
+| `Desktop\Absolute_Blockchain_Ultimate_Hybrid` | **Audit freeze** pin — GitHub [`dup-protocol`](https://github.com/Gruver87/dup-protocol) |
+| `Desktop\Absolute_Blockchain_Experimental` | **R&D line** — GitHub [`dup-protocol-experimental`](https://github.com/Gruver87/dup-protocol-experimental) |
+| `Desktop\dup-protocol-v2` | **This copy** — unification check |
 
 ## Rules
 
-1. **Push only** to [Gruver87/dup-protocol-experimental](https://github.com/Gruver87/dup-protocol-experimental) (`origin`).
-2. Remote `audit-frozen` is fetch-only — **do not** push to the audit pin repo.
-3. Work on `experimental/libp2p-longrange-evm` / `rd/*` branches (merge to `main` when ready).
-4. Honesty: experimental ≠ public mainnet ≠ audited firm PDF. Experimental prod mesh (`778888`) **is** libp2p (ADR 0020) with 48h PASS [`3c801b87`](docs/evidence/runs/3c801b87/); Hybrid pin stays TCP+TLS / `feature_libp2p=false`.
-5. GitHub Releases here use **`rd-X.Y.Z` prerelease** tags — never Hybrid `v1.3.*`.
+1. Push this tree only to [Gruver87/dup-protocol-v2](https://github.com/Gruver87/dup-protocol-v2).
+2. Do **not** push polygon commits onto the pin or Experimental remotes.
+3. Honesty: v2 ≠ public mainnet ≠ firm PDF ≠ 48h soak on this copy.
+4. Do not mix TCP+TLS pin compose and libp2p Experimental mesh JSON in one node.
 
-## Transport default
-
-- **Experimental prod mesh (`778888`):** **libp2p Noise** (ADR 0020) — 48h PASS [`3c801b87`](docs/evidence/runs/3c801b87/) · STRICT [`lp2pstrict1`](docs/evidence/runs/lp2pstrict1/).
-- **Hybrid audit pin:** native **TCP + TLS/mTLS** (`feature_libp2p=false`).
-- **Long-Range:** lab only (`FEATURE_LONG_RANGE` / lab compose). Lab 48h PASS [`lr48pass1`](docs/evidence/runs/lr48pass1/) · STRICT [`lrstrict1`](docs/evidence/runs/lrstrict1/); prod JSON + staging keep `feature_long_range=false`.
-- **Phase 3:** post-EVM-prep mesh 48h PASS [`evm48pass1`](docs/evidence/runs/evm48pass1/) — not EVM-only.
-
-Profile F: [docs/sprouts/EXPERIMENTAL_RD_PROFILE.md](docs/sprouts/EXPERIMENTAL_RD_PROFILE.md)
-
-## R&D tracks
-
-| Track | Entry |
-|-------|-------|
-| EVM compat | [EVM_COMPAT_MATRIX.md](docs/sprouts/EVM_COMPAT_MATRIX.md) · precompiles lab |
-| Long-Range | `python scripts/long_range_lab.py` · ADR 0017 |
-| libp2p (Python dual-stack) | `python scripts/libp2p_lab_smoke.py` · ADR 0018 |
-| libp2p (rust industrial) | [ADR 0019](docs/adr/0019-rust-libp2p-industrial.md) Slices **A–DB** · `scripts/verify_adr0019_libp2p_hard.ps1` |
-
-## Verify
-
-```powershell
-cd $env:USERPROFILE\Desktop\Absolute_Blockchain_Experimental
-
-# Profile F units + Python labs
-python scripts\verify_experimental_rd.py
-
-# ADR 0019 rust-libp2p hard gate (116 steps after Slice DB; 117 with `-Rebuild`)
-powershell -ExecutionPolicy Bypass -File scripts\verify_adr0019_libp2p_hard.ps1
-
-# Optional: Hybrid (sibling) + Experimental as one operator view
-powershell -ExecutionPolicy Bypass -File scripts\verify_absolute_unified.ps1 -Mode Standard
-```
-
-## Bootstrap this copy
-
-```powershell
-cd $env:USERPROFILE\Desktop\Absolute_Blockchain_Experimental
-pip install -r requirements.txt
-if (-not (Test-Path .env)) { Copy-Item .env.example .env }
-.\scripts\build_native.ps1
-# For ADR 0019 rust labs, rebuild with libp2p feature (see README)
-```
-
-Frozen audit original:
-
-`C:\Users\vovun\Desktop\Absolute_Blockchain_Ultimate_Hybrid`
+See [docs/V2_POLYGON.md](docs/V2_POLYGON.md).

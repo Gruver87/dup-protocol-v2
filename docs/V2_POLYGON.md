@@ -14,6 +14,7 @@
 | 1 | Snapshot **Experimental HEAD** as the working codebase (money/honesty waves + mesh scripts) |
 | 2 | Overlay **pin-only docs** that were missing (`DEMO_RUNBOOK_PIN.md`, `VISION.md`) |
 | 3 | Drop tails: `.git`, `.env`, `data/`, `logs/`, wallets, caches, `RELEASE_NOTES_v1.2.*` / `v1.3.*` spam, social posts, unused `geth_*` porting dirs, evidence `*.log` |
+| 4 | 2026-10-04 scan: drop empty dashboard, root HTML explorers, `rust_blockchain/`, `init_git.ps1`, unused `nft_core.py`, pin `sync-main-from-master.yml`, localhost screenshots |
 
 Sources at copy time (operator disk):
 

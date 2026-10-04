@@ -1,6 +1,9 @@
 ﻿version: '3.8'
 
-# Legacy 3-node compose — use docker-compose.devnet.yml for the maintained two-node devnet.
+# LEGACY. Do not use for fund demo. May enable bridge via docker/node1.json.
+# Industrial: docker-compose.prod.3node.p2ptls.yml
+# Experimental libp2p mesh: docker-compose.prod.3node.yml
+# Maintained two-node lab: docker-compose.devnet.yml
 services:
   node1:
     build: .

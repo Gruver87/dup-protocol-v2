@@ -56,7 +56,12 @@ Native (when you intend to run a node): `.\scripts\build_native.ps1`
 - Pin vision: [VISION](docs/VISION.md) · pin demo: [DEMO_RUNBOOK_PIN](docs/DEMO_RUNBOOK_PIN.md)
 - Fund operator pack: [FUND_DEMO_OPERATOR_PACK](docs/FUND_DEMO_OPERATOR_PACK.md)
 
-Until this polygon has its **own** packaged 48h, cite soak packs on the **source** repos, not as “v2 soak PASS”.
+## Tails stripped (2026-10-04 scan)
+
+Removed from this copy: empty `dashboard.html`, root HTML explorers (kept `web/`), `rust_blockchain/` (no src), `init_git.ps1`, unused `nft_core.py`, pin `sync-main-from-master.yml`, localhost screenshots.
+
+**Still inherited from Experimental (not deleted):** wave/lab scripts archive, Long-Range lab JSON, `docker/node1.json` bridge-on (legacy compose only — do not start for fund demo).
+
 
 ---
 
