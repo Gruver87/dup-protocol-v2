@@ -23,7 +23,7 @@ dependencies = [
  "rustls-pemfile",
  "serde_json",
  "sha2",
- "socket2 0.5.10",
+ "socket2 0.6.5",
  "tiny-keccak",
  "tokio",
  "x509-parser",
